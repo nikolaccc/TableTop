@@ -657,18 +657,45 @@ function toast(msg, type='info', dur=3500) {
   setTimeout(() => { t.style.opacity='0'; t.style.transform='translateY(12px)'; t.style.transition='all .3s'; setTimeout(()=>t.remove(),350); }, dur);
 }
 
-async function api(url, data=null, method=null) {
-  const opts = { headers: {'Content-Type':'application/json'} };
+async function api(url, data=null, method=null, timeoutMs=15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const opts = {
+    headers: {'Content-Type':'application/json'},
+    signal: controller.signal,
+    cache: 'no-store'
+  };
   if (data) { opts.method = method||'POST'; opts.body = JSON.stringify(data); }
-  else       { opts.method = method||'GET'; }
-  const r = await fetch(url, opts);
-  return r.json();
+  else      { opts.method = method||'GET'; }
+  try {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    let payload = {};
+    try { payload = text ? JSON.parse(text) : {}; }
+    catch(e) { payload = { ok:false, error: text || ('HTTP ' + r.status) }; }
+    if (!r.ok && payload.ok !== false) payload.ok = false;
+    if (!r.ok && !payload.error) payload.error = 'Greška servera: HTTP ' + r.status;
+    return payload;
+  } catch(e) {
+    if (e && e.name === 'AbortError') {
+      return { ok:false, error:'Zahtev je istekao. Osvežite stranicu i pokušajte ponovo.' };
+    }
+    return { ok:false, error:'Veza sa serverom nije uspela. Proverite konekciju ili osvežite stranicu.' };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function setLoading(btn, loading) {
   if (!btn) return;
-  if (loading) { btn._orig = btn.innerHTML; btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true; }
-  else         { btn.innerHTML = btn._orig||''; btn.disabled = false; }
+  if (loading) {
+    if (!btn.dataset.origHtml) btn.dataset.origHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span>';
+    btn.disabled = true;
+  } else {
+    btn.innerHTML = btn.dataset.origHtml || btn._orig || 'Nastavi';
+    btn.disabled = false;
+  }
 }
 
 // Tab system

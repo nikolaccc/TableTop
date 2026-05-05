@@ -261,7 +261,12 @@ const INITIAL_LEADER_NAME = {{ leader_name|tojson }};
 const PHASE_COUNT = {{ phase_count }};
 let currentPhase = {{ phase_idx }};
 let selected = [null, null, null, null];
+let isSubmittingIndividual = false;
+let isSubmittingConsensus = false;
 let phaseData = null;  // loaded from server
+let lastPhaseState = null;
+let state = null; // server phase_state cache; prevents undefined reference during phase render
+let submitWatchdog = null;
 let pollInterval = null;
 let timerInterval = null;
 let timerStart = null;
@@ -270,11 +275,61 @@ const TIMER_TOTAL = 360; // 6 minutes
 // ── PHASE DATA (preloaded from Jinja) ─────────────────────────────────────────
 const PHASES_JSON = {{ phases_json|safe }};
 
+window.addEventListener('error', (ev) => {
+  try {
+    isSubmittingIndividual = false;
+    isSubmittingConsensus = false;
+    const sb = document.getElementById('submitBtn');
+    const cb = document.getElementById('consensusBtn');
+    setLoading(sb, false); updateProgress();
+    setLoading(cb, false); if (cb) cb.disabled = false;
+    toast('Greška u prikazu je presretnuta. Pokušajte ponovo ili osvežite stranicu.', 'error');
+    console.error('BlackGrid UI error:', ev.error || ev.message);
+  } catch(e) {}
+});
+
+function clearSubmitWatchdog() {
+  if (submitWatchdog) { clearTimeout(submitWatchdog); submitWatchdog = null; }
+}
+function armSubmitWatchdog(kind) {
+  clearSubmitWatchdog();
+  submitWatchdog = setTimeout(() => {
+    if (kind === 'individual') {
+      isSubmittingIndividual = false;
+      const b = document.getElementById('submitBtn');
+      setLoading(b, false); updateProgress();
+    } else {
+      isSubmittingConsensus = false;
+      const b = document.getElementById('consensusBtn');
+      setLoading(b, false); if (b) b.disabled = false;
+    }
+    toast('Zahtev nije završen na vreme. Dugme je resetovano — pokušajte ponovo.', 'error');
+  }, 20000);
+}
+
+
 // ── SECTION SWITCHER ──────────────────────────────────────────────────────────
 function show(sectionId) {
   ['idleSection','phaseSection','waitSection','answersSection','resultSection','doneSection']
     .forEach(id => document.getElementById(id).style.display = 'none');
   document.getElementById(sectionId).style.display = 'block';
+}
+
+// Hard reset for buttons that may have been hidden while still in loading state.
+// This is critical when moving from one phase to the next: hidden buttons keep
+// their DOM state, so a spinner from F1 can reappear in F2 if not reset.
+function resetButton(btn, html, disabled=false) {
+  if (!btn) return;
+  btn.dataset.origHtml = html;
+  btn.innerHTML = html;
+  btn.disabled = !!disabled;
+}
+
+function resetSubmitState() {
+  isSubmittingIndividual = false;
+  isSubmittingConsensus = false;
+  resetButton(document.getElementById('submitBtn'), 'Predaj individualni odgovor', true);
+  resetButton(document.getElementById('consensusBtn'), 'Predaj timski konsenzus', false);
 }
 
 // ── TIMER ─────────────────────────────────────────────────────────────────────
@@ -328,6 +383,7 @@ async function startPhase() {
 }
 
 function loadPhaseUI(elapsed=0) {
+  if (state && Array.isArray(state.my_answers) && state.my_answers.length) selected = state.my_answers.slice(0,4);
   const p = PHASES_JSON[currentPhase];
   if (!p) { show('doneSection'); return; }
 
@@ -353,6 +409,7 @@ function loadPhaseUI(elapsed=0) {
   const qs = p.questions;
   const allQ = [qs.shared, ...(qs[team] || [['—',['—'],0,'—'],['—',['—'],0,'—'],['—',['—'],0,'—']])];
   selected = [null,null,null,null];
+  resetSubmitState();
 
   allQ.forEach((q, qi) => {
     document.getElementById(`qText${qi}`).textContent = q[0];
@@ -382,41 +439,61 @@ function selectOpt(qi, oi, val, btn, container) {
 }
 
 function updateProgress() {
-  const answered = selected.filter(s=>s!==null).length;
-  document.getElementById('progressTxt').textContent = `${answered} / 4 pitanja`;
-  const pct = answered/4*100;
+  const total = selected.length || 4;
+  const answered = selected.filter(s=>s!==null && s!=='').length;
+  document.getElementById('progressTxt').textContent = `${answered} / ${total} pitanja`;
+  const pct = total ? answered/total*100 : 0;
   const bar = document.getElementById('progressBar');
   bar.style.width = pct+'%';
   bar.style.background = pct===100?'#22c55e':pct>0?'var(--blue)':'var(--text-muted)';
-  document.getElementById('submitBtn').disabled = answered < 4;
+  document.getElementById('submitBtn').disabled = answered < total || isSubmittingIndividual;
 }
 
 // ── SUBMIT INDIVIDUAL ─────────────────────────────────────────────────────────
 async function submitAnswers() {
-  if (selected.some(s=>s===null)) { toast('Odgovorite na sva 4 pitanja.','error'); return; }
+  if (isSubmittingIndividual) return;
+  if (selected.some(s=>s===null || s==='')) { toast('Odgovorite na sva pitanja.','error'); return; }
   const btn = document.getElementById('submitBtn');
+  isSubmittingIndividual = true;
   setLoading(btn, true);
-  const r = await api('/api/submit_individual', {token: TOKEN, answers: selected});
-  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); return; }
-  if (r.consensus_done) {
+  armSubmitWatchdog('individual');
+  try {
+    const r = await api('/api/submit_individual', {token: TOKEN, answers: selected}, 'POST', 15000);
+    if (!r || !r.ok) {
+      toast((r && r.error) ? r.error : 'Predaja individualnog odgovora nije uspela.','error');
+      return;
+    }
+    toast('Individualni odgovor predat. Osvežavam stanje…','success', 1200);
     stopTimer();
-    toast(r.message || 'Timski konsenzus je već predat. Prikazujem rezultat.','info');
-    showResults(r);
-    return;
+    clearSubmitWatchdog();
+
+    // Hard sync: do not rely on stale local JS state between phases.
+    // Reloading immediately after a successful submit forces the page to rebuild
+    // from backend STATE and prevents stuck spinners/disabled buttons.
+    setTimeout(() => { window.location.href = `/play?token=${encodeURIComponent(TOKEN)}&ts=${Date.now()}`; }, 250);
+  } catch(e) {
+    console.error('submitAnswers error', e);
+    toast('Došlo je do greške pri predaji odgovora. Osvežite stranicu i pokušajte ponovo.','error');
+  } finally {
+    // If navigation is delayed/blocked, restore button instead of leaving spinner forever.
+    setTimeout(() => {
+      clearSubmitWatchdog();
+      isSubmittingIndividual = false;
+      setLoading(btn, false);
+      if (getCurrentView() === 'phaseSection') updateProgress();
+    }, 1800);
   }
-  toast('Individualni odgovor predat!','success');
-  show('waitSection');
-  document.getElementById('waitText').textContent =
-    `${r.submitted} / ${r.total} članova predalo odgovor`;
-  buildTeamStatus(r.submitted, r.total);
-  // poll until all submitted
 }
+
 
 function buildTeamStatus(sub, tot) {
   const el = document.getElementById('teamStatusWrap');
+  const total = Number(tot || 0);
+  const submitted = Number(sub || 0);
+  const pct = total > 0 ? Math.round(submitted/total*100) : 0;
   el.innerHTML = `<div class="card-inset" style="font-family:var(--mono);font-size:12px;color:var(--text-3);">
-    Predato: <span style="color:#fff;font-weight:700;">${sub}/${tot}</span> članova
-    <div class="progress mt-8"><div class="progress-bar" style="width:${Math.round(sub/tot*100)}%;background:var(--blue);"></div></div>
+    Predato: <span style="color:#fff;font-weight:700;">${submitted}/${total}</span> članova
+    <div class="progress mt-8"><div class="progress-bar" style="width:${pct}%;background:var(--blue);"></div></div>
   </div>`;
 }
 
@@ -428,7 +505,7 @@ function startPoll() {
 
 async function doPoll() {
   try {
-    const r = await api(`/api/phase_state?token=${TOKEN}`);
+    const r = await fetchPhaseState();
     if (!r.ok) {
       if (r.session_expired) {
         clearInterval(pollInterval);
@@ -506,6 +583,46 @@ function getCurrentView() {
   return ids.find(id => document.getElementById(id).style.display !== 'none') || 'idleSection';
 }
 
+
+async function fetchPhaseState() {
+  const r = await api(`/api/phase_state?token=${encodeURIComponent(TOKEN)}`, null, 'GET', 10000);
+  if (r && r.ok) { lastPhaseState = r; state = r; }
+  return r;
+}
+
+function applyPhaseState(r) {
+  if (!r || !r.ok) return false;
+  if (typeof r.phase === 'number' && r.phase !== currentPhase) {
+    currentPhase = r.phase;
+    selected = [null,null,null,null];
+    resetSubmitState();
+    updateStepper(currentPhase);
+  }
+  if (Array.isArray(r.my_answers) && r.my_answers.length) {
+    selected = r.my_answers.slice(0,4);
+  }
+  if (r.consensus_done) {
+    stopTimer();
+    showResults(r);
+    return true;
+  }
+  if (r.my_submitted) {
+    stopTimer();
+    const submitted = Number(r.submitted_count || 0);
+    const total = Number(r.total_members || 0);
+    if (submitted >= total && total > 0) {
+      if (r.is_leader) showConsensus(r);
+      else showLeaderWait(r.leader_name, r.has_leader);
+    } else {
+      show('waitSection');
+      document.getElementById('waitText').textContent = `${submitted} / ${total} članova predalo odgovor`;
+      buildTeamStatus(submitted, total);
+    }
+    return true;
+  }
+  return false;
+}
+
 // ── CONSENSUS ─────────────────────────────────────────────────────────────────
 function showLeaderWait(leaderName, hasLeader=true) {
   show('waitSection');
@@ -516,7 +633,9 @@ function showLeaderWait(leaderName, hasLeader=true) {
   document.getElementById('teamStatusWrap').innerHTML = `<div class="alert alert-info">${hasLeader ? 'Ne morate ništa dodatno da radite. Rezultat će se pojaviti automatski kada šef tima preda konsenzus.' : 'Moderator može resetovati/odrediti šefa tima novim login-om.'}</div>`;
 }
 
-function showConsensus() {
+function showConsensus(state=null) {
+  if (state && Array.isArray(state.my_answers) && state.my_answers.length) selected = state.my_answers.slice(0,4);
+  stopTimer();
   if (!IS_LEADER) {
     showLeaderWait(INITIAL_LEADER_NAME, !!INITIAL_LEADER_NAME);
     return;
@@ -537,7 +656,10 @@ function showConsensus() {
       </div>`).join('');
 
   document.getElementById('consensusTitle').textContent = 'Šef tima — predaja konačnog timskog konsenzusa';
-  document.getElementById('consensusBtn').style.display = 'flex';
+  const cBtn = document.getElementById('consensusBtn');
+  cBtn.style.display = 'flex';
+  resetButton(cBtn, 'Predaj timski konsenzus', false);
+  isSubmittingConsensus = false;
 
   // Build consensus dropdowns
   const form = document.getElementById('consensusForm');
@@ -554,24 +676,50 @@ function showConsensus() {
 }
 
 async function submitConsensus() {
-  const answers = [0,1,2,3].map(i => document.getElementById(`cq${i}`)?.value || '');
-  if (answers.some(a=>!a)) { toast('Odaberite timski odgovor za sva pitanja.','error'); return; }
+  if (isSubmittingConsensus) return;
+  const selects = Array.from(document.querySelectorAll('#consensusForm select'));
+  const answers = selects.map(el => el.value || '');
+  if (answers.length === 0 || answers.some(a=>!a)) { toast('Odaberite timski odgovor za sva pitanja.','error'); return; }
   const btn = document.getElementById('consensusBtn');
+  isSubmittingConsensus = true;
   setLoading(btn, true);
-  btn.disabled = true;
-  const r = await api('/api/submit_consensus', {token: TOKEN, answers});
-  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); btn.disabled=false; return; }
-  stopTimer();
-  if (r.already_done) toast(r.message || 'Timski konsenzus je već predat.','info');
-  showResults(r);
+  if (btn) btn.disabled = true;
+  armSubmitWatchdog('consensus');
+  try {
+    const r = await api('/api/submit_consensus', {token: TOKEN, answers}, 'POST', 15000);
+    if (!r || !r.ok) {
+      toast((r && r.error) ? r.error : 'Predaja timskog odgovora nije uspela.','error');
+      return;
+    }
+    clearSubmitWatchdog();
+    stopTimer();
+    if (r.already_done) toast(r.message || 'Timski konsenzus je već predat.','info');
+    showResults(r);
+    // Keep button disabled after successful consensus to prevent duplicate clicks.
+    if (btn) { btn.disabled = true; btn.innerHTML = 'Timski konsenzus predat'; }
+  } catch(e) {
+    console.error('submitConsensus error', e);
+    toast('Došlo je do greške pri predaji konsenzusa. Osvežite stranicu i pokušajte ponovo.','error');
+  } finally {
+    clearSubmitWatchdog();
+    isSubmittingConsensus = false;
+    if (getCurrentView() === 'answersSection') {
+      setLoading(btn,false);
+      if (btn) btn.disabled=false;
+    }
+  }
 }
+
+
+
 
 // ── RESULTS ───────────────────────────────────────────────────────────────────
 function showResults(r) {
   clearInterval(pollInterval);
   const el = document.getElementById('resultContent');
-  const okCnt = r.results.filter(x=>x.ok).length;
-  const pctOk = Math.round(okCnt/r.results.length*100);
+  const results = Array.isArray(r.results) ? r.results : [];
+  const okCnt = results.filter(x=>x.ok).length;
+  const pctOk = results.length ? Math.round(okCnt/results.length*100) : 0;
 
   let html = `
     <div class="card mb-12" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
@@ -585,7 +733,7 @@ function showResults(r) {
       </div>
     </div>`;
 
-  r.results.forEach((res, i) => {
+  results.forEach((res, i) => {
     html += `<div class="result-item ${res.ok?'ok':'bad'} mb-8">
       <div class="result-q">${res.ok?'✅':'❌'} ${res.question}</div>
       <div class="result-row"><span style="color:var(--text-muted);">Odgovor:</span> ${res.selected}</div>
@@ -595,6 +743,7 @@ function showResults(r) {
   });
 
   el.innerHTML = html;
+  resetSubmitState();
   show('resultSection');
 
   // Check if more phases
@@ -614,6 +763,9 @@ async function goNextPhase() {
   if (!r.ok) { toast(r.error,'error'); return; }
   currentPhase = r.phase;
   selected = [null,null,null,null];
+  resetSubmitState();
+  const cf = document.getElementById('consensusForm');
+  if (cf) cf.innerHTML = '';
   updateStepper(currentPhase);
 
   // Re-render idle section for new phase
@@ -705,6 +857,11 @@ async function logoutNow() {
   if (!pollInterval) pollInterval = setInterval(doPoll, 3000);
   setInterval(loadInjects, 15000);
   setInterval(loadMedia, 10000);
+  // Last-resort UI rescue: never allow hidden/stale spinners to survive between phases.
+  setInterval(() => {
+    if (!isSubmittingIndividual) { const b=document.getElementById('submitBtn'); if (b && b.innerHTML.includes('spinner')) { setLoading(b,false); updateProgress(); } }
+    if (!isSubmittingConsensus) { const b=document.getElementById('consensusBtn'); if (b && b.innerHTML.includes('spinner') && getCurrentView()==='answersSection') { setLoading(b,false); b.disabled=false; } }
+  }, 1000);
 })();
 </script>
 {% endblock %}
