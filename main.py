@@ -27,15 +27,36 @@ except ImportError:
 
 _PARTICIPANT_HASH = os.environ.get("PARTICIPANT_CODE_HASH", "").strip()
 _MOD_HASH         = os.environ.get("MOD_PWD_HASH", "").strip()
+# Optional plain ENV values are supported for easier Azure debugging.
+# Prefer *_HASH values in production. No fallback secrets are hardcoded.
+_PARTICIPANT_CODE = os.environ.get("PARTICIPANT_CODE", "").strip()
+_MOD_PASSWORD     = os.environ.get("MOD_PASSWORD", "")
+
+def _norm_code(v: str) -> str:
+    """Normalize exercise codes only: BG–2026–01 == bg-2026-01."""
+    return str(v or "").strip().replace("–", "-").replace("—", "-").upper()
 
 def _sha(v: str) -> str:
     return hashlib.sha256(str(v).strip().encode()).hexdigest()
 
+def _sha_code(v: str) -> str:
+    return hashlib.sha256(_norm_code(v).encode()).hexdigest()
+
 def check_participant(code: str) -> bool:
-    return bool(_PARTICIPANT_HASH) and _sha(code) == _PARTICIPANT_HASH
+    c = _norm_code(code)
+    if _PARTICIPANT_HASH and _sha_code(c) == _PARTICIPANT_HASH:
+        return True
+    if _PARTICIPANT_CODE and c == _norm_code(_PARTICIPANT_CODE):
+        return True
+    return False
 
 def check_mod(pw: str) -> bool:
-    return bool(_MOD_HASH) and _sha(pw) == _MOD_HASH
+    # Moderator password remains case-sensitive.
+    if _MOD_HASH and _sha(pw) == _MOD_HASH:
+        return True
+    if _MOD_PASSWORD and str(pw) == _MOD_PASSWORD:
+        return True
+    return False
 
 # ─── RATE LIMITER ─────────────────────────────────────────────────────────────
 _RATE: dict = {}
@@ -1114,10 +1135,22 @@ async def startup():
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def get_session(token: str):
-    return STATE["sessions"].get((token or "").strip().upper())
+    tok = (token or "").strip().upper()
+    s = STATE["sessions"].get(tok)
+    # Important on Azure if more than one worker was accidentally configured:
+    # load the latest persisted snapshot before declaring a session inactive.
+    if not s:
+        db_load()
+        s = STATE["sessions"].get(tok)
+    return s
 
 def get_token_meta(token: str):
-    return STATE["tokens"].get((token or "").strip().upper())
+    tok = (token or "").strip().upper()
+    meta = STATE["tokens"].get(tok)
+    if not meta:
+        db_load()
+        meta = STATE["tokens"].get(tok)
+    return meta
 
 def require_mod(token: str):
     meta = get_token_meta(token)
@@ -1188,6 +1221,7 @@ async def api_login(req: Request, body: LoginRequest):
         with STATE_LOCK:
             STATE["tokens"][token] = {"mode": "moderator", "name": body.name or "Moderator"}
         log_event("MOD_LOGIN", token, "Moderator", body.name or "Moderator")
+        db_save()
         return JSONResponse({"ok": True, "token": token, "mode": "moderator", "redirect": f"/mod?token={token}"})
 
     # Participant
@@ -1203,6 +1237,7 @@ async def api_login(req: Request, body: LoginRequest):
             "decisions": {}, "started_at": time.time(), "phase_started_at": None,
         }
     log_event("STUDENT_LOGIN", token, body.team, body.name)
+    db_save()
     return JSONResponse({"ok": True, "token": token, "mode": "student", "redirect": f"/play?token={token}"})
 
 @app.post("/api/rejoin")
@@ -1232,6 +1267,7 @@ async def api_start_phase(body: dict):
         if key not in STATE["team_phases"]:
             STATE["team_phases"][key] = {"individual": {}, "consensus": [], "status": "active"}
     log_event("START_PHASE", token, s["team"], s["name"], f"F{phase_idx+1}")
+    db_save()
     return JSONResponse({"ok": True})
 
 @app.post("/api/submit_individual")
@@ -1249,6 +1285,7 @@ async def api_submit_individual(body: dict):
         tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active"})
         tp["individual"][token] = answers
     log_event("INDIVIDUAL_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1}")
+    db_save()
     # Count team members
     with STATE_LOCK:
         members = [t for t, ss in STATE["sessions"].items() if ss["team"] == s["team"]]
@@ -1297,7 +1334,7 @@ async def api_submit_consensus(body: dict):
                         "question": q[0]
                     }
     log_event("CONSENSUS_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1} skor:{gained}")
-    threading.Thread(target=db_save, daemon=True).start()
+    db_save()
     return JSONResponse({"ok": True, "gained": gained, "max": len(all_q) * 10, "results": results})
 
 @app.get("/api/phase_state")
@@ -1344,6 +1381,7 @@ async def api_next_phase(body: dict):
         if key not in STATE["team_phases"]:
             STATE["team_phases"][key] = {"individual": {}, "consensus": [], "status": "active"}
     log_event("NEXT_PHASE", token, s["team"], s["name"], f"F{next_idx+1}")
+    db_save()
     return JSONResponse({"ok": True, "phase": next_idx})
 
 @app.get("/api/injects")
@@ -1373,6 +1411,7 @@ async def api_respond_inject(body: dict):
             "team": s["team"], "name": s["name"], "text": text
         })
     log_event("INJECT_RESPONSE", token, s["team"], s["name"], f"{inject_id}: {text[:80]}")
+    db_save()
     return JSONResponse({"ok": True})
 
 @app.get("/api/media_feed")
@@ -1447,7 +1486,7 @@ async def api_mod_unlock(body: dict):
     with STATE_LOCK:
         STATE["phase_locks"][team] = current + 1
     log_event("MOD_UNLOCK", token, team, "Moderator", f"Otključana F{current+2}")
-    threading.Thread(target=db_save, daemon=True).start()
+    db_save()
     return JSONResponse({"ok": True, "unlocked": current + 1})
 
 @app.post("/api/mod/unlock_all")
@@ -1459,6 +1498,7 @@ async def api_mod_unlock_all(body: dict):
         for team in TEAMS:
             STATE["phase_locks"][team] = phase_idx
     log_event("MOD_UNLOCK_ALL", token, "ALL", "Moderator", f"Sve faze na {phase_idx+1}")
+    db_save()
     return JSONResponse({"ok": True})
 
 @app.post("/api/mod/inject")
@@ -1478,6 +1518,7 @@ async def api_mod_inject(body: dict):
     with STATE_LOCK:
         STATE["injects"].append(inj)
     log_event("MOD_INJECT", token, target, sender, f"{inj['id']}: {msg[:80]}")
+    db_save()
     return JSONResponse({"ok": True, "id": inj["id"]})
 
 @app.post("/api/mod/breaking")
@@ -1498,6 +1539,7 @@ async def api_mod_breaking(body: dict):
     with STATE_LOCK:
         STATE["media_feed"].append(item)
     log_event("MOD_BREAKING", token, target, channel, text[:80])
+    db_save()
     return JSONResponse({"ok": True, "id": item["id"]})
 
 @app.get("/api/mod/events")
@@ -1522,7 +1564,7 @@ async def api_mod_reset(body: dict):
             STATE[k].clear() if isinstance(STATE[k], (dict, list)) else None
         # Keep mod token
         STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator"}
-    threading.Thread(target=db_save, daemon=True).start()
+    db_save()
     return JSONResponse({"ok": True})
 
 @app.get("/api/mod/scoreboard")
@@ -1598,7 +1640,7 @@ async def api_update_scenario(body: dict):
             STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator"}
     log_event("SCENARIO_UPDATE", token, "", "Moderator",
               f"{len(phases)} faza, reset={reset_sessions}")
-    threading.Thread(target=db_save, daemon=True).start()
+    db_save()
     return JSONResponse({"ok": True, "phases": len(phases), "reset": reset_sessions})
 
 # ─── DEBRIEFING TIMELINE ──────────────────────────────────────────────────────
