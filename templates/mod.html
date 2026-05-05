@@ -9,27 +9,40 @@
 
 {% block extra_head %}
 <style>
-.mod-wrap { max-width: 1600px; margin: 0 auto; padding: 20px var(--page-x) 64px; }
-.mod-header { margin-bottom: 24px; }
-.stat-grid-mod { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 24px; }
-@media(max-width:640px){ .stat-grid-mod { grid-template-columns: repeat(2,1fr); } }
-.inject-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-.preset-pill {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .5px;
-  padding: 6px 12px; border-radius: 999px;
-  background: rgba(255,255,255,.05); border: 1px solid var(--border);
-  color: var(--text-3); cursor: pointer; transition: all .18s;
-}
-.preset-pill:hover { border-color: var(--blue); color: var(--blue-light); }
-.preset-pill.active { border-color: var(--blue); background: rgba(42,109,217,.15); color: var(--blue-light); }
-.teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 12px; }
-.events-list { font-family: var(--mono); font-size: 12px; }
-.events-list .ev { padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; gap: 12px; flex-wrap: wrap; }
-.ev-time { color: var(--text-muted); min-width: 70px; }
-.ev-kind { color: var(--blue-light); min-width: 140px; }
-.ev-team { color: var(--text-2); }
-.ev-det  { color: var(--text-3); overflow-wrap: anywhere; }
-.ltc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.mod-wrap{max-width:1600px;margin:0 auto;padding:20px var(--page-x) 64px;}
+.mod-header{margin-bottom:24px;}
+.stat-grid-mod{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:24px;}
+@media(max-width:640px){.stat-grid-mod{grid-template-columns:repeat(2,1fr);}}
+.inject-presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+.preset-pill{font-family:var(--mono);font-size:10px;letter-spacing:.5px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid var(--border);color:var(--text-3);cursor:pointer;transition:all .18s;}
+.preset-pill:hover{border-color:var(--blue);color:var(--blue-light);}
+.preset-pill.active{border-color:var(--blue);background:rgba(42,109,217,.15);color:var(--blue-light);}
+.teams-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;}
+.events-list{font-family:var(--mono);font-size:12px;}
+.ev{padding:8px 0;border-bottom:1px solid var(--border);display:flex;gap:12px;flex-wrap:wrap;}
+.ev-time{color:var(--text-muted);min-width:70px;}
+.ev-kind{color:var(--blue-light);min-width:160px;}
+.ev-team{color:var(--text-2);min-width:120px;}
+.ev-det{color:var(--text-3);overflow-wrap:anywhere;flex:1;}
+.ltc-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
+.scenario-editor{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+@media(max-width:900px){.scenario-editor{grid-template-columns:1fr;}}
+#scenarioJson{font-family:var(--mono);font-size:12px;line-height:1.6;min-height:380px;resize:vertical;background:#020810;color:#7ee8a2;border-color:rgba(34,197,94,.2);}
+#scenarioJson:focus{border-color:rgba(34,197,94,.5);box-shadow:0 0 0 3px rgba(34,197,94,.1);}
+.preview-phase{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:8px;}
+.preview-phase-title{font-family:var(--mono);font-size:12px;color:var(--red);margin-bottom:4px;}
+.preview-phase-clock{font-size:11px;color:var(--blue-light);}
+.debrief-team{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:12px;}
+.debrief-team-header{display:flex;align-items:center;gap:12px;margin-bottom:12px;}
+.debrief-rank{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--text-muted);min-width:36px;}
+.debrief-rank.gold{color:#fbbf24;}.debrief-rank.silver{color:#94a3b8;}.debrief-rank.bronze{color:#cd7c44;}
+.debrief-score{font-family:var(--mono);font-size:26px;font-weight:700;color:#fff;}
+.debrief-acc{font-size:13px;color:var(--text-2);margin-top:2px;}
+.debrief-phases{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;}
+.debrief-phase-pill{font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:999px;background:rgba(42,109,217,.12);border:1px solid rgba(42,109,217,.3);color:var(--blue-light);}
+.observer-link{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(42,109,217,.08);border:1px solid rgba(42,109,217,.25);border-radius:var(--radius);padding:12px 16px;}
+.observer-url{font-family:var(--mono);font-size:12px;color:var(--blue-light);word-break:break-all;flex:1;}
+@media(max-width:768px){.mod-wrap{padding-left:14px!important;padding-right:14px!important;}.scenario-editor{grid-template-columns:1fr;}}
 </style>
 {% endblock %}
 
@@ -40,139 +53,104 @@
     <h1 class="display-sm">Operation <em style="color:var(--red);">Black Grid</em></h1>
   </div>
 
-  <!-- STAT STRIP -->
-  <div class="stat-grid-mod" id="statStrip">
+  <div class="stat-grid-mod">
     <div class="stat-box"><div class="stat-val" id="stSessions">—</div><div class="stat-lbl">Sesija</div></div>
     <div class="stat-box"><div class="stat-val" id="stTeams">—</div><div class="stat-lbl">Timova</div></div>
     <div class="stat-box"><div class="stat-val" id="stInjects">—</div><div class="stat-lbl">Injects</div></div>
     <div class="stat-box"><div class="stat-val" id="stResp">—</div><div class="stat-lbl">Odgovora</div></div>
   </div>
 
-  <!-- TABS -->
   <div data-tabs>
     <div class="tabs">
       <button class="tab-btn active" data-tab="tabDash">📊 Dashboard</button>
       <button class="tab-btn" data-tab="tabInjects">✉️ Injects</button>
       <button class="tab-btn" data-tab="tabBreaking">🚨 Breaking</button>
       <button class="tab-btn" data-tab="tabScore">🏆 Skor</button>
+      <button class="tab-btn" data-tab="tabDebrief">🔁 Debriefing</button>
+      <button class="tab-btn" data-tab="tabScenario">✏️ Scenario</button>
       <button class="tab-btn" data-tab="tabEvents">📋 Log</button>
-      <button class="tab-btn" data-tab="tabReset">⚙️ Reset</button>
+      <button class="tab-btn" data-tab="tabExport">⚙️ Export/Reset</button>
     </div>
 
-    <!-- ── DASHBOARD ── -->
+    <!-- DASHBOARD -->
     <div class="tab-panel active" id="tabDash">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
         <div class="kicker">Live status timova</div>
         <button class="btn btn-ghost btn-sm" onclick="loadDash()">↻ Osveži</button>
       </div>
-      <div class="alert alert-info mb-16">
-        <strong>Otključavanje faze:</strong> Kliknite dugme ispod tima kada je tim završio konsenzus i spreman je za sledeću fazu.
-      </div>
-      <div class="teams-grid" id="teamsGrid">
-        <div class="card text-dim text-sm">Učitavanje…</div>
-      </div>
-
+      <div class="alert alert-info mb-16"><strong>Otključavanje:</strong> Kliknite dugme ispod tima kada je tim završio konsenzus.</div>
+      <div class="teams-grid" id="teamsGrid"><div class="card text-dim text-sm">Učitavanje…</div></div>
       <div class="mt-24">
-        <div class="kicker mb-12">Otključaj fazu za SVE timove odjednom</div>
+        <div class="kicker mb-12">Otključaj sve timove odjednom</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
           <div class="input-group" style="flex:1;min-width:160px;">
-            <label class="input-label" for="unlockAllPhase">Faza (1–{{ phases|length }})</label>
+            <label class="input-label">Faza</label>
             <select class="input" id="unlockAllPhase">
-              {% for i in range(phases|length) %}
-              <option value="{{ i }}">Faza {{ i+1 }}: {{ phases[i].title[:40] }}…</option>
-              {% endfor %}
+              {% for i in range(phases|length) %}<option value="{{ i }}">Faza {{ i+1 }}: {{ phases[i].title[:45] }}…</option>{% endfor %}
             </select>
           </div>
           <button class="btn btn-secondary" onclick="unlockAll()" style="height:var(--tap);">🔓 Otključaj sve</button>
         </div>
         <div id="unlockAllStatus" class="mt-8"></div>
       </div>
+      <div class="mt-24">
+        <div class="kicker mb-12">👁 Observer link (read-only za posmatrače)</div>
+        <div class="observer-link">
+          <div class="observer-url" id="observerUrl">…</div>
+          <button class="btn btn-secondary btn-sm" onclick="copyObserver()">Kopiraj</button>
+        </div>
+        <div class="text-xs text-dim mt-8">Pošalji ovaj link predavačima — mogu pratiti vežbu bez mod kontrola.</div>
+      </div>
     </div>
 
-    <!-- ── INJECTS ── -->
+    <!-- INJECTS -->
     <div class="tab-panel" id="tabInjects">
       <div class="kicker mb-16">Pošalji moderatorsku poruku timu</div>
-
       <div class="inject-presets" id="presetBtns">
-        {% for sender in presets %}
-        <button class="preset-pill {% if loop.first %}active{% endif %}" onclick="loadPreset('{{ sender }}',this)">{{ sender }}</button>
-        {% endfor %}
+        {% for sender in presets %}<button class="preset-pill {% if loop.first %}active{% endif %}" onclick="loadPreset('{{ sender }}',this)">{{ sender }}</button>{% endfor %}
       </div>
-
       <div class="form-stack" style="gap:14px;">
         <div class="form-row">
-          <div class="input-group">
-            <label class="input-label" for="injSender">Pošiljalac</label>
-            <input class="input" id="injSender" value="Novinar" placeholder="Novinar, Poverenik…">
-          </div>
-          <div class="input-group">
-            <label class="input-label" for="injTarget">Ciljni tim</label>
-            <select class="input" id="injTarget">
-              <option value="Svi timovi">Svi timovi</option>
-              {% for team in teams %}
-              <option value="{{ team }}">{{ team }}</option>
-              {% endfor %}
-            </select>
+          <div class="input-group"><label class="input-label">Pošiljalac</label><input class="input" id="injSender" value="Novinar" placeholder="Novinar…"></div>
+          <div class="input-group"><label class="input-label">Ciljni tim</label>
+            <select class="input" id="injTarget"><option value="Svi timovi">Svi timovi</option>{% for team in teams %}<option value="{{ team }}">{{ team }}</option>{% endfor %}</select>
           </div>
         </div>
-
-        <div class="input-group">
-          <label class="input-label">Predefinisane poruke</label>
-          <div id="presetMsgList" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto;">
-          </div>
+        <div class="input-group"><label class="input-label">Predefinisane poruke</label>
+          <div id="presetMsgList" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto;"></div>
         </div>
-
-        <div class="input-group">
-          <label class="input-label" for="injMsg">Ili vlastita poruka</label>
+        <div class="input-group"><label class="input-label">Ili vlastita poruka</label>
           <textarea class="input" id="injMsg" rows="3" placeholder="Unesite tekst…" style="min-height:80px;resize:vertical;"></textarea>
         </div>
-
-        <div class="input-group" style="max-width:200px;">
-          <label class="input-label" for="injDeadline">Rok odgovora (minuta)</label>
+        <div class="input-group" style="max-width:200px;"><label class="input-label">Rok odgovora (min)</label>
           <input class="input" id="injDeadline" type="number" value="5" min="1" max="30">
         </div>
-
         <button class="btn btn-primary" onclick="sendInject()" style="max-width:240px;">📨 Pošalji poruku</button>
         <div id="injStatus"></div>
       </div>
-
       <div class="mt-24">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-          <div class="kicker">Log poslatih poruka</div>
+          <div class="kicker">Log poruka i odgovora</div>
           <button class="btn btn-ghost btn-sm" onclick="loadRespLog()">↻</button>
         </div>
         <div id="injLog"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
       </div>
     </div>
 
-    <!-- ── BREAKING NEWS ── -->
+    <!-- BREAKING -->
     <div class="tab-panel" id="tabBreaking">
       <div class="kicker mb-4">Pošalji breaking news</div>
-      <div class="alert alert-warn mb-16">
-        Breaking news poruke su vidljive svim učesnicima u Live Media Feed-u. Neodgovaranje nosi penal od -2 poena.
-      </div>
+      <div class="alert alert-warn mb-16">Breaking news poruke su vidljive svim učesnicima. Neodgovaranje: -2 poena.</div>
       <div class="form-stack" style="gap:14px;">
         <div class="form-row">
-          <div class="input-group">
-            <label class="input-label" for="brTarget">Ciljni tim</label>
-            <select class="input" id="brTarget">
-              <option value="Svi">Svi timovi</option>
-              {% for team in teams %}
-              <option value="{{ team }}">{{ team }}</option>
-              {% endfor %}
-            </select>
+          <div class="input-group"><label class="input-label">Ciljni tim</label>
+            <select class="input" id="brTarget"><option value="Svi">Svi timovi</option>{% for team in teams %}<option value="{{ team }}">{{ team }}</option>{% endfor %}</select>
           </div>
-          <div class="input-group">
-            <label class="input-label" for="brChannel">Kanal</label>
-            <select class="input" id="brChannel">
-              <option>TWITTER</option><option>RTS UŽIVO</option><option>POVERENIK</option>
-              <option>AMBASADA</option><option>BORSA</option><option>TUŽILAŠTVO</option>
-              <option>VLADA</option><option>NEWSWEEK</option><option>MODERATOR</option>
-            </select>
+          <div class="input-group"><label class="input-label">Kanal</label>
+            <select class="input" id="brChannel"><option>TWITTER</option><option>RTS UŽIVO</option><option>POVERENIK</option><option>AMBASADA</option><option>BORSA</option><option>TUŽILAŠTVO</option><option>VLADA</option><option>NEWSWEEK</option><option>MODERATOR</option></select>
           </div>
         </div>
-        <div class="input-group">
-          <label class="input-label" for="brText">Tekst breaking news poruke</label>
+        <div class="input-group"><label class="input-label">Tekst</label>
           <textarea class="input" id="brText" rows="3" placeholder="Hitno: …" style="min-height:80px;resize:vertical;"></textarea>
         </div>
         <button class="btn btn-primary" onclick="sendBreaking()" style="max-width:240px;">🚨 Pošalji breaking news</button>
@@ -180,16 +158,58 @@
       </div>
     </div>
 
-    <!-- ── SCOREBOARD ── -->
+    <!-- SCOREBOARD -->
     <div class="tab-panel" id="tabScore">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
         <div class="kicker">Rang lista timova</div>
         <button class="btn btn-ghost btn-sm" onclick="loadScore()">↻ Osveži</button>
       </div>
-      <div class="card" id="scoreList"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
+      <div id="scoreList"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
     </div>
 
-    <!-- ── EVENT LOG ── -->
+    <!-- DEBRIEFING -->
+    <div class="tab-panel" id="tabDebrief">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+        <div class="kicker">After-Action Report</div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="loadDebrief()">↻ Osveži</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportPdf()">⬇ PDF</button>
+          <button class="btn btn-secondary btn-sm" onclick="exportJson()">⬇ JSON</button>
+        </div>
+      </div>
+      <div id="debriefContent"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
+    </div>
+
+    <!-- SCENARIO EDITOR -->
+    <div class="tab-panel" id="tabScenario">
+      <div class="kicker mb-4">Editor scenarija</div>
+      <div class="alert alert-info mb-16">
+        Upload .json fajla ili paste JSON direktno. <strong>Zameni bez resetovanja</strong> čuva sesije.
+        <strong>Zameni i resetuj</strong> briše sve sesije i skorove.
+      </div>
+      <div class="scenario-editor">
+        <div class="form-stack" style="gap:12px;">
+          <div class="input-group"><label class="input-label">Upload JSON fajla</label>
+            <input class="input" type="file" id="scenarioFile" accept=".json" style="padding:10px;" onchange="loadScenarioFile(this)">
+          </div>
+          <div class="input-group"><label class="input-label">JSON scenarija</label>
+            <textarea class="input" id="scenarioJson" rows="18" placeholder='Kliknite "Učitaj trenutni" ili paste JSON ovde…'></textarea>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="loadCurrentScenario()">📥 Učitaj trenutni</button>
+            <button class="btn btn-primary btn-sm" onclick="applyScenario(false)">✅ Zameni bez resetovanja</button>
+            <button class="btn btn-secondary btn-sm" onclick="applyScenario(true)" style="border-color:rgba(220,38,38,.4);">⚠️ Zameni i resetuj</button>
+          </div>
+          <div id="scenarioStatus"></div>
+        </div>
+        <div>
+          <div class="kicker mb-12">Preview faza</div>
+          <div id="scenarioPreview" style="max-height:520px;overflow-y:auto;"><div class="text-dim text-sm">Učitaj JSON da vidiš preview.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- EVENT LOG -->
     <div class="tab-panel" id="tabEvents">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
         <div class="kicker">Tok događaja (poslednji 100)</div>
@@ -198,204 +218,290 @@
       <div class="events-list" id="eventsList"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
     </div>
 
-    <!-- ── RESET ── -->
-    <div class="tab-panel" id="tabReset">
-      <div class="alert alert-error mb-16">
-        ⚠️ Ova akcija briše SVE sesije, skorove, odgovore i podatke vežbe bez mogućnosti povratka.
-        Koristite isključivo pre početka nove vežbe.
-      </div>
-      <div class="card" style="max-width:400px;">
-        <div class="input-group mb-12">
-          <label class="input-label" for="resetConfirm">Upišite "RESET" za potvrdu</label>
-          <input class="input" id="resetConfirm" placeholder="RESET">
+    <!-- EXPORT/RESET -->
+    <div class="tab-panel" id="tabExport">
+      <div class="form-row">
+        <div class="card">
+          <div class="kicker mb-12">Export podataka</div>
+          <div class="form-stack" style="gap:10px;">
+            <button class="btn btn-secondary btn-full" onclick="exportPdf()">⬇ PDF After-Action Report</button>
+            <button class="btn btn-secondary btn-full" onclick="exportJson()">⬇ JSON export</button>
+            <div class="text-xs text-dim">PDF: sumarni pregled, skorovi, rezultati po fazama, hronologija.</div>
+          </div>
         </div>
-        <button class="btn btn-secondary btn-full" onclick="doReset()">🗑️ Resetuj vežbu</button>
-        <div id="resetStatus" class="mt-8"></div>
+        <div class="card">
+          <div class="kicker mb-12">Reset vežbe</div>
+          <div class="alert alert-error mb-12">⚠️ Briše SVE sesije, skorove i podatke bez mogućnosti povratka.</div>
+          <div class="form-stack" style="gap:10px;">
+            <div class="input-group"><label class="input-label">Upiši "RESET" za potvrdu</label>
+              <input class="input" id="resetConfirm" placeholder="RESET">
+            </div>
+            <button class="btn btn-secondary btn-full" onclick="doReset()">🗑️ Resetuj vežbu</button>
+            <div id="resetStatus"></div>
+          </div>
+        </div>
       </div>
     </div>
 
-  </div><!-- /data-tabs -->
-</div><!-- /mod-wrap -->
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 const MOD_TOKEN = '{{ token }}';
 const PRESETS_DATA = {{ presets_json|safe }};
-let currentPresetSender = '{{ presets.keys()|list|first }}';
+const PHASE_COUNT = {{ phases|length }};
 
-// ── DASHBOARD ──────────────────────────────────────────────────────────────────
+// Observer URL
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('observerUrl').textContent =
+    window.location.origin + '/observe?key=' + encodeURIComponent(MOD_TOKEN);
+});
+function copyObserver() {
+  navigator.clipboard.writeText(window.location.origin + '/observe?key=' + encodeURIComponent(MOD_TOKEN))
+    .then(() => toast('Link kopiran!','success'));
+}
+
+// Dashboard
 async function loadDash() {
   const r = await api(`/api/mod/dashboard?token=${MOD_TOKEN}`, null, 'GET');
-  // Stats
   document.getElementById('stSessions').textContent = r.stats.sessions;
   document.getElementById('stTeams').textContent    = r.stats.teams;
   document.getElementById('stInjects').textContent  = r.stats.injects;
   document.getElementById('stResp').textContent     = r.stats.responses;
-  // Teams grid
   const grid = document.getElementById('teamsGrid');
-  if (!r.teams.length) {
-    grid.innerHTML = '<div class="card text-dim text-sm">Nema prijavljenih učesnika. Čekanje na timove…</div>';
-    return;
-  }
+  if (!r.teams.length) { grid.innerHTML='<div class="card text-dim text-sm">Nema prijavljenih učesnika.</div>'; return; }
   grid.innerHTML = r.teams.map(t => {
-    const phasePct = Math.round((t.phases_done.filter(Boolean).length / {{ phases|length }}) * 100);
+    const phasePct = Math.round(t.phases_done.filter(Boolean).length / PHASE_COUNT * 100);
     const memberHtml = t.members.map(m =>
-      `<div class="ltc-member ${m.submitted?'done':''}">${m.submitted?'✅ ':'⏳ '}${escHtml(m.name)}</div>`
+      `<div class="ltc-member ${m.submitted?'done':''}">${m.submitted?'✅ ':'⏳ '}${esc(m.name)}<span style="color:var(--amber);margin-left:4px;">${m.score}pt</span></div>`
     ).join('');
-    const dotsHtml = Array.from({length:{{ phases|length }}},(_,i)=>{
-      const d = t.phases_done[i] ? 'done' : (i===t.current_phase?'active':'');
-      return `<div class="phase-dot ${d}" title="F${i+1}"></div>`;
+    const dotsHtml = Array.from({length:PHASE_COUNT},(_,i)=>{
+      const c=t.phases_done[i]?'done':(i===t.current_phase?'active':'');
+      return `<div class="phase-dot ${c}" title="F${i+1}"></div>`;
     }).join('');
-    const statusBadge = t.consensus_done
-      ? '<span class="badge badge-green">✅ Konsenzus</span>'
-      : t.ind_count > 0
-        ? `<span class="badge badge-amber">🤝 ${t.ind_count}/${t.members.length} predali</span>`
-        : '<span class="badge badge-muted">✍️ Individualni</span>';
-    const unlockBtn = t.can_unlock
-      ? `<button class="btn btn-secondary btn-sm" onclick="unlockTeam('${escHtml(t.team)}',this)">🔓 Otključaj F${t.current_phase+2}</button>`
-      : '';
+    const sb = t.consensus_done ? '<span class="badge badge-green">✅ Konsenzus</span>'
+      : t.ind_count>0 ? `<span class="badge badge-amber">🤝 ${t.ind_count}/${t.members.length}</span>`
+      : '<span class="badge badge-muted">✍️ Čekanje</span>';
+    const ub = t.can_unlock
+      ? `<button class="btn btn-secondary btn-sm" onclick="unlockTeam('${esc(t.team)}',this)">🔓 F${t.current_phase+2}</button>` : '';
     return `<div class="live-team-card">
       <div class="ltc-header">
         <div class="ltc-icon">${t.icon}</div>
-        <div style="flex:1;min-width:0;">
-          <div class="ltc-name overflow-anywhere">${escHtml(t.team)}</div>
-          <div class="text-xs text-dim">F${t.current_phase+1} · ${statusBadge}</div>
-        </div>
+        <div style="flex:1;min-width:0;"><div class="ltc-name overflow-anywhere">${esc(t.team)}</div>
+          <div class="text-xs" style="margin-top:3px;">F${t.current_phase+1} · ${sb}</div></div>
         <div class="ltc-score">${t.team_score}<span style="font-size:11px;color:var(--text-muted);"> pt</span></div>
       </div>
       <div class="ltc-dots">${dotsHtml}</div>
       <div class="progress mt-8"><div class="progress-bar" style="width:${phasePct}%;background:var(--blue);"></div></div>
       <div class="ltc-members mt-8">${memberHtml}</div>
-      <div class="ltc-actions">${unlockBtn}</div>
+      <div class="ltc-actions">${ub}</div>
     </div>`;
   }).join('');
 }
 
 async function unlockTeam(team, btn) {
   setLoading(btn, true);
-  const r = await api('/api/mod/unlock', {token: MOD_TOKEN, team});
-  if (r.ok) { toast(`✅ Faza ${r.unlocked+1} otključana za ${team}`,'success'); loadDash(); }
-  else { toast(r.error,'error'); setLoading(btn,false); }
+  const r = await api('/api/mod/unlock', {token:MOD_TOKEN, team});
+  r.ok ? (toast(`✅ F${r.unlocked+1} otključana za ${team}`,'success'), loadDash())
+       : (toast(r.error,'error'), setLoading(btn,false));
 }
 
 async function unlockAll() {
   const phase = parseInt(document.getElementById('unlockAllPhase').value);
-  const r = await api('/api/mod/unlock_all', {token: MOD_TOKEN, phase});
+  const r = await api('/api/mod/unlock_all', {token:MOD_TOKEN, phase});
   const st = document.getElementById('unlockAllStatus');
-  if (r.ok) { st.innerHTML=`<div class="alert alert-success">✅ Svi timovi otključani na Fazu ${phase+1}.</div>`; loadDash(); }
-  else { st.innerHTML=`<div class="alert alert-error">${r.error}</div>`; }
+  r.ok ? (st.innerHTML=`<div class="alert alert-success">✅ Svi timovi na F${phase+1}.</div>`, loadDash())
+       : (st.innerHTML=`<div class="alert alert-error">${r.error}</div>`);
 }
 
-// ── INJECTS ────────────────────────────────────────────────────────────────────
+// Injects
 function loadPreset(sender, btn) {
-  currentPresetSender = sender;
   document.querySelectorAll('.preset-pill').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('injSender').value = sender;
-  const msgs = PRESETS_DATA[sender] || [];
-  document.getElementById('presetMsgList').innerHTML = msgs.map(m=>`
-    <div class="card-inset" style="cursor:pointer;font-size:13px;color:var(--text-2);" onclick="document.getElementById('injMsg').value=this.textContent.trim();">${m}</div>
-  `).join('');
+  const msgs = PRESETS_DATA[sender]||[];
+  document.getElementById('presetMsgList').innerHTML = msgs.map(m=>
+    `<div class="card-inset" style="cursor:pointer;font-size:13px;color:var(--text-2);"
+          onclick="document.getElementById('injMsg').value=this.textContent.trim();">${m}</div>`).join('');
 }
 
 async function sendInject() {
-  const msg      = document.getElementById('injMsg').value.trim();
-  const sender   = document.getElementById('injSender').value.trim() || 'Moderator';
-  const target   = document.getElementById('injTarget').value;
-  const deadline = parseInt(document.getElementById('injDeadline').value)||5;
-  const st = document.getElementById('injStatus');
-  if (!msg) { st.innerHTML='<div class="alert alert-error">Unesite poruku.</div>'; return; }
-  const r = await api('/api/mod/inject', {token:MOD_TOKEN, msg, sender, target, deadline});
-  st.innerHTML = r.ok
-    ? `<div class="alert alert-success">✅ Poslato · ID: <code style="font-family:var(--mono);">${r.id}</code></div>`
-    : `<div class="alert alert-error">${r.error}</div>`;
-  if(r.ok) document.getElementById('injMsg').value='';
-  loadRespLog();
+  const msg=document.getElementById('injMsg').value.trim(),
+        sender=document.getElementById('injSender').value.trim()||'Moderator',
+        target=document.getElementById('injTarget').value,
+        deadline=parseInt(document.getElementById('injDeadline').value)||5,
+        st=document.getElementById('injStatus');
+  if(!msg){st.innerHTML='<div class="alert alert-error">Unesite poruku.</div>';return;}
+  const r=await api('/api/mod/inject',{token:MOD_TOKEN,msg,sender,target,deadline});
+  st.innerHTML=r.ok?`<div class="alert alert-success">✅ Poslato · ID: <code style="font-family:var(--mono);">${r.id}</code></div>`:`<div class="alert alert-error">${r.error}</div>`;
+  if(r.ok){document.getElementById('injMsg').value='';loadRespLog();}
 }
 
 async function loadRespLog() {
-  const r = await api(`/api/mod/responses?token=${MOD_TOKEN}`, null, 'GET');
-  const el = document.getElementById('injLog');
-  if (!r.length) { el.innerHTML='<div class="text-dim text-sm">Nema odgovora.</div>'; return; }
-  el.innerHTML=`<div class="table-wrap"><table>
-    <thead><tr><th>Vreme</th><th>Tim</th><th>Ime</th><th>ID poruke</th><th>Odgovor</th></tr></thead>
-    <tbody>${r.slice().reverse().map(x=>`<tr>
-      <td class="inject-log-table">${x.time}</td>
-      <td>${escHtml(x.team)}</td>
-      <td>${escHtml(x.name)}</td>
-      <td><code>${x.inject_id}</code></td>
-      <td>${escHtml(x.text)}</td>
-    </tr>`).join('')}</tbody>
-  </table></div>`;
+  const r=await api(`/api/mod/responses?token=${MOD_TOKEN}`,null,'GET');
+  const el=document.getElementById('injLog');
+  if(!r.length){el.innerHTML='<div class="text-dim text-sm">Nema odgovora.</div>';return;}
+  el.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Vreme</th><th>Tim</th><th>Ime</th><th>ID</th><th>Odgovor</th></tr></thead><tbody>
+    ${r.slice().reverse().map(x=>`<tr><td>${x.time}</td><td>${esc(x.team)}</td><td>${esc(x.name)}</td>
+    <td><code style="font-family:var(--mono);font-size:11px;">${x.inject_id}</code></td><td>${esc(x.text)}</td></tr>`).join('')}
+  </tbody></table></div>`;
 }
 
-// ── BREAKING ───────────────────────────────────────────────────────────────────
+// Breaking
 async function sendBreaking() {
-  const text    = document.getElementById('brText').value.trim();
-  const channel = document.getElementById('brChannel').value;
-  const target  = document.getElementById('brTarget').value;
-  const st = document.getElementById('brStatus');
-  if (!text) { st.innerHTML='<div class="alert alert-error">Unesite tekst.</div>'; return; }
-  const r = await api('/api/mod/breaking', {token:MOD_TOKEN, text, channel, target});
-  st.innerHTML = r.ok
-    ? `<div class="alert alert-success">🚨 Breaking news poslat · ID: <code style="font-family:var(--mono);">${r.id}</code></div>`
-    : `<div class="alert alert-error">${r.error}</div>`;
-  if(r.ok) document.getElementById('brText').value='';
+  const text=document.getElementById('brText').value.trim(),
+        channel=document.getElementById('brChannel').value,
+        target=document.getElementById('brTarget').value,
+        st=document.getElementById('brStatus');
+  if(!text){st.innerHTML='<div class="alert alert-error">Unesite tekst.</div>';return;}
+  const r=await api('/api/mod/breaking',{token:MOD_TOKEN,text,channel,target});
+  st.innerHTML=r.ok?`<div class="alert alert-success">🚨 Poslato · ID: <code style="font-family:var(--mono);">${r.id}</code></div>`:`<div class="alert alert-error">${r.error}</div>`;
+  if(r.ok)document.getElementById('brText').value='';
 }
 
-// ── SCOREBOARD ─────────────────────────────────────────────────────────────────
+// Scoreboard
 async function loadScore() {
-  const r = await api(`/api/mod/scoreboard?token=${MOD_TOKEN}`, null, 'GET');
-  const el = document.getElementById('scoreList');
-  if (!r.length) { el.innerHTML='<div class="text-dim text-sm">Nema podataka.</div>'; return; }
-  const medals = ['gold','silver','bronze'];
-  el.innerHTML = r.map((t,i)=>{
-    const acc = t.total_q ? Math.round(t.correct/t.total_q*100) : 0;
-    return `<div class="score-row">
-      <div class="score-rank ${medals[i]||''}">${i+1}.</div>
+  const r=await api(`/api/mod/scoreboard?token=${MOD_TOKEN}`,null,'GET');
+  const el=document.getElementById('scoreList');
+  if(!r.length){el.innerHTML='<div class="text-dim text-sm">Nema podataka.</div>';return;}
+  const m=['gold','silver','bronze'];
+  el.innerHTML='<div class="card" style="padding:0;overflow:hidden;">'+r.map((t,i)=>{
+    const acc=t.total_q?Math.round(t.correct/t.total_q*100):0;
+    return `<div class="score-row" style="padding:14px 20px;">
+      <div class="score-rank ${m[i]||''}">${i+1}.</div>
       <div class="score-team-icon">${t.icon}</div>
-      <div style="flex:1;min-width:0;">
-        <div class="score-team-name">${escHtml(t.team)}</div>
-        <div class="text-xs text-dim">${t.members} članova · Tačnost: ${acc}% (${t.correct}/${t.total_q})</div>
-      </div>
+      <div style="flex:1;min-width:0;"><div class="score-team-name">${esc(t.team)}</div>
+        <div class="text-xs text-dim">${t.members} članova · Tačnost: ${acc}% (${t.correct}/${t.total_q})</div></div>
       <div class="score-pts">${t.score}</div>
     </div>`;
-  }).join('');
+  }).join('')+'</div>';
 }
 
-// ── EVENTS ─────────────────────────────────────────────────────────────────────
-async function loadEvents() {
-  const r = await api(`/api/mod/events?token=${MOD_TOKEN}`, null, 'GET');
-  const el = document.getElementById('eventsList');
-  if (!r.length) { el.innerHTML='<div class="text-dim text-sm">Nema događaja.</div>'; return; }
-  el.innerHTML = r.slice().reverse().map(e=>`
-    <div class="ev">
-      <span class="ev-time">${e.time}</span>
-      <span class="ev-kind">${e.kind}</span>
-      <span class="ev-team">${escHtml(e.team)}</span>
-      <span class="ev-det overflow-anywhere">${escHtml(e.details)}</span>
-    </div>`).join('');
+// Debriefing
+async function loadDebrief() {
+  const r=await api(`/api/mod/debrief?token=${MOD_TOKEN}`,null,'GET');
+  const el=document.getElementById('debriefContent');
+  if(!r.ok){el.innerHTML='<div class="alert alert-error">Greška.</div>';return;}
+  const m=['gold','silver','bronze'];
+  let html='<div class="kicker mb-12">Rang lista</div>';
+  r.team_summary.forEach((t,i)=>{
+    html+=`<div class="debrief-team">
+      <div class="debrief-team-header">
+        <div class="debrief-rank ${m[i]||''}">${i+1}.</div>
+        <div style="font-size:24px;">${t.icon}</div>
+        <div style="flex:1;"><div style="font-size:16px;font-weight:700;color:#fff;">${esc(t.team)}</div>
+          <div class="debrief-acc">Tačnost: ${t.accuracy}% (${t.total_ok}/${t.total_q})</div></div>
+        <div class="debrief-score">${t.total_score}<span style="font-size:14px;color:var(--text-muted);"> pt</span></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        ${t.members.map(mb=>`<span class="badge badge-muted">${esc(mb.name)} · ${mb.score}pt</span>`).join('')}
+      </div>
+      <div class="debrief-phases">
+        ${t.phases_done.map(p=>`<span class="debrief-phase-pill">✅ F${p.phase+1}</span>`).join('')}
+        ${!t.phases_done.length?'<span class="text-dim text-xs">Nema završenih faza</span>':''}
+      </div>
+    </div>`;
+  });
+  if(r.events.length){
+    html+='<div class="kicker mt-24 mb-12">Hronologija</div><div class="events-list">';
+    r.events.slice().reverse().forEach(e=>{
+      html+=`<div class="ev"><span class="ev-time">${e.time}</span><span class="ev-kind">${e.kind}</span><span class="ev-team">${esc(e.team||'')}</span><span class="ev-det overflow-anywhere">${esc(e.details||'')}</span></div>`;
+    });
+    html+='</div>';
+  }
+  el.innerHTML=html;
 }
 
-// ── RESET ──────────────────────────────────────────────────────────────────────
-async function doReset() {
-  const confirm = document.getElementById('resetConfirm').value.trim();
-  const st = document.getElementById('resetStatus');
-  const r = await api('/api/mod/reset', {token:MOD_TOKEN, confirm});
-  st.innerHTML = r.ok
-    ? '<div class="alert alert-success">✅ Vežba resetovana.</div>'
-    : `<div class="alert alert-error">${r.error}</div>`;
+// Scenario editor
+async function loadCurrentScenario() {
+  const r=await api(`/api/mod/scenario?token=${MOD_TOKEN}`,null,'GET');
+  if(!r.ok){toast('Greška učitavanja.','error');return;}
+  document.getElementById('scenarioJson').value=JSON.stringify(r.phases,null,2);
+  renderPreview(r.phases);
+  toast('Scenario učitan.','success');
 }
 
-// ── UTILS ──────────────────────────────────────────────────────────────────────
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function loadScenarioFile(input) {
+  const file=input.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      const phases=Array.isArray(data)?data:(data.phases||data);
+      document.getElementById('scenarioJson').value=JSON.stringify(phases,null,2);
+      renderPreview(phases);
+      toast(`Fajl učitan: ${phases.length} faza.`,'success');
+    }catch{toast('Nevalidan JSON fajl.','error');}
+  };
+  reader.readAsText(file);
 }
 
-// ── INIT ──────────────────────────────────────────────────────────────────────
+function renderPreview(phases){
+  if(!Array.isArray(phases))return;
+  document.getElementById('scenarioPreview').innerHTML=phases.map((p,i)=>
+    `<div class="preview-phase"><div class="preview-phase-title">F${i+1}: ${esc(p.title||'')}</div>
+    <div class="preview-phase-clock">🕐 ${esc(p.clock||'')} · ${esc((p.narrative||'').substring(0,80))}…</div></div>`
+  ).join('');
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  document.getElementById('scenarioJson').addEventListener('input',function(){
+    try{const p=JSON.parse(this.value);renderPreview(Array.isArray(p)?p:(p.phases||p));}catch{}
+  });
+});
+
+async function applyScenario(resetSessions){
+  const raw=document.getElementById('scenarioJson').value.trim();
+  const st=document.getElementById('scenarioStatus');
+  if(!raw){st.innerHTML='<div class="alert alert-error">JSON je prazan.</div>';return;}
+  let phases;
+  try{const p=JSON.parse(raw);phases=Array.isArray(p)?p:(p.phases||p);}
+  catch(e){st.innerHTML=`<div class="alert alert-error">Nevalidan JSON: ${e.message}</div>`;return;}
+  if(resetSessions&&!confirm('Ovo briše SVE sesije i skorove. Nastavi?'))return;
+  const r=await api('/api/mod/scenario',{token:MOD_TOKEN,phases,reset_sessions:resetSessions});
+  r.ok?(st.innerHTML=`<div class="alert alert-success">✅ Scenario ažuriran — ${r.phases} faza.${r.reset?' Sesije resetovane.':''}</div>`,toast('Primenjeno!','success'),loadDash())
+      :(st.innerHTML=`<div class="alert alert-error">${r.error}</div>`);
+}
+
+// Events
+async function loadEvents(){
+  const r=await api(`/api/mod/events?token=${MOD_TOKEN}`,null,'GET');
+  const el=document.getElementById('eventsList');
+  if(!r.length){el.innerHTML='<div class="text-dim text-sm">Nema događaja.</div>';return;}
+  el.innerHTML=r.slice().reverse().map(e=>
+    `<div class="ev"><span class="ev-time">${e.time}</span><span class="ev-kind">${e.kind}</span><span class="ev-team">${esc(e.team||'')}</span><span class="ev-det overflow-anywhere">${esc(e.details||'')}</span></div>`
+  ).join('');
+}
+
+// Export
+function exportPdf(){
+  const a=document.createElement('a');a.href=`/api/mod/export_pdf?token=${MOD_TOKEN}`;a.click();
+}
+async function exportJson(){
+  const r=await fetch(`/api/mod/export_json?token=${MOD_TOKEN}`);
+  const blob=await r.blob();
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`blackgrid_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+}
+
+// Reset
+async function doReset(){
+  const confirm_val=document.getElementById('resetConfirm').value.trim();
+  const st=document.getElementById('resetStatus');
+  const r=await api('/api/mod/reset',{token:MOD_TOKEN,confirm:confirm_val});
+  st.innerHTML=r.ok?'<div class="alert alert-success">✅ Vežba resetovana.</div>':`<div class="alert alert-error">${r.error}</div>`;
+}
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
 loadDash();
-setInterval(loadDash, 8000);
-loadPreset('{{ presets.keys()|list|first }}', document.querySelector('.preset-pill'));
+setInterval(loadDash,8000);
+window.addEventListener('DOMContentLoaded',()=>{
+  loadPreset('{{ presets.keys()|list|first }}',document.querySelector('.preset-pill'));
+});
 </script>
 {% endblock %}

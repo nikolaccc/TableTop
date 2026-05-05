@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %} — Live Observer{% endblock %}
+
+{% block topbar_right %}
+<span class="badge badge-blue mono">👁 OBSERVER</span>
+<span class="badge badge-muted mono" style="font-size:10px;">READ ONLY</span>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.obs-wrap { max-width: 1400px; margin: 0 auto; padding: 20px var(--page-x) 64px; }
+.obs-header { margin-bottom: 24px; display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px,1fr)); gap: 14px; }
+.phase-progress { display: flex; gap: 4px; margin: 8px 0; }
+.pp-dot {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: rgba(255,255,255,.08);
+  transition: background .4s;
+}
+.pp-dot.done   { background: var(--blue); }
+.pp-dot.active { background: var(--red); }
+.obs-scorebar { height: 8px; background: rgba(255,255,255,.07); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.obs-scorebar-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--teal)); border-radius: 4px; transition: width .6s ease; }
+.pulse-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; color: var(--text-3);
+}
+.pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse-dot 2s infinite; }
+@media(max-width:640px){ .teams-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="obs-wrap">
+  <div class="obs-header">
+    <div>
+      <div class="kicker red mb-4">⚡ Operation Black Grid</div>
+      <h1 class="display-sm">Live <em style="color:var(--blue-light);">Observer</em></h1>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
+      <div class="pulse-badge"><div class="pulse-dot"></div> Auto-refresh 5s</div>
+      <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);gap:8px;" id="statStrip">
+        <div class="stat-box"><div class="stat-val" id="stS">—</div><div class="stat-lbl">Sesija</div></div>
+        <div class="stat-box"><div class="stat-val" id="stT">—</div><div class="stat-lbl">Timova</div></div>
+        <div class="stat-box"><div class="stat-val" id="stI">—</div><div class="stat-lbl">Injecta</div></div>
+        <div class="stat-box"><div class="stat-val" id="stP">—</div><div class="stat-lbl">Faza</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="teams-grid" id="teamsGrid">
+    <div class="card text-dim text-sm">Učitavanje…</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const OBS_KEY = '{{ key }}';
+
+async function load() {
+  const r = await api(`/api/observe/dashboard?key=${encodeURIComponent(OBS_KEY)}`, null, 'GET');
+  if (!r || !r.teams) return;
+
+  document.getElementById('stS').textContent = r.stats.sessions;
+  document.getElementById('stT').textContent = r.stats.teams;
+  document.getElementById('stI').textContent = r.stats.injects;
+  document.getElementById('stP').textContent = r.stats.total_phases;
+
+  const maxScore = Math.max(...r.teams.map(t => t.team_score), 1);
+  const grid = document.getElementById('teamsGrid');
+
+  if (!r.teams.length) {
+    grid.innerHTML = '<div class="card text-dim text-sm">Nema prijavljenih timova.</div>';
+    return;
+  }
+
+  grid.innerHTML = r.teams.map(t => {
+    const dotsHtml = t.phases_done.map((done, i) => {
+      const cls = done ? 'done' : (i === t.current_phase && t.ind_count > 0 ? 'active' : '');
+      return `<div class="pp-dot ${cls}" title="F${i+1}"></div>`;
+    }).join('');
+
+    const statusHtml = t.consensus_done
+      ? '<span class="badge badge-green">✅ Konsenzus predat</span>'
+      : t.ind_count > 0
+        ? `<span class="badge badge-amber">✍️ ${t.ind_count}/${t.members.length} individualni</span>`
+        : '<span class="badge badge-muted">⏳ Čekanje</span>';
+
+    const memberHtml = t.members.map(m =>
+      `<span class="ltc-member ${m.submitted ? 'done' : ''}">${m.submitted ? '✅' : '⏳'} ${escHtml(m.name)}</span>`
+    ).join('');
+
+    const scorePct = Math.round(t.team_score / maxScore * 100);
+
+    return `<div class="live-team-card">
+      <div class="ltc-header">
+        <div class="ltc-icon">${t.icon}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="ltc-name">${escHtml(t.team)}</div>
+          <div style="margin-top:4px;">${statusHtml}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="ltc-score">${t.team_score}<span style="font-size:10px;color:var(--text-muted);"> pt</span></div>
+          <div class="text-xs text-dim">F${t.current_phase + 1}</div>
+        </div>
+      </div>
+      <div class="phase-progress">${dotsHtml}</div>
+      <div class="obs-scorebar"><div class="obs-scorebar-fill" style="width:${scorePct}%"></div></div>
+      <div class="ltc-members mt-8">${memberHtml}</div>
+    </div>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+load();
+setInterval(load, 5000);
+</script>
+{% endblock %}
