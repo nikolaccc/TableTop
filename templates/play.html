@@ -1,0 +1,630 @@
+{% extends "base.html" %}
+{% block title %} — {{ session.team }}{% endblock %}
+
+{% block topbar_right %}
+<span class="badge badge-muted mono" id="scoreBadge">🏆 {{ session.score }} pts</span>
+<a href="/" class="btn btn-ghost btn-sm">← Izlaz</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.play-wrap { max-width: 760px; margin: 0 auto; padding: 20px var(--page-x) 64px; }
+#phaseSection  { display: none; }
+#idleSection   { display: block; }
+#answersSection{ display: none; }
+#waitSection   { display: none; }
+#resultSection { display: none; }
+#doneSection   { display: none; }
+.q-num { font-family: var(--mono); font-size: 10px; letter-spacing: 2px; color: var(--text-3); margin-bottom: 6px; }
+.q-text { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 10px; line-height: 1.4; }
+.q-block { margin-bottom: 16px; }
+.answer-opts { display: flex; flex-direction: column; gap: 6px; }
+.opt-btn {
+  width: 100%; text-align: left;
+  padding: 12px 16px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-2); font-family: var(--sans); font-size: 14px;
+  cursor: pointer; transition: all .18s; line-height: 1.4;
+  -webkit-tap-highlight-color: transparent;
+}
+.opt-btn:hover { border-color: var(--border-2); background: rgba(255,255,255,.08); color: var(--text); }
+.opt-btn.selected { border-color: var(--blue); background: rgba(42,109,217,.12); color: #fff; }
+.phase-lock-msg { text-align: center; padding: 48px 20px; }
+.phase-lock-msg .lock-icon { font-size: 40px; margin-bottom: 12px; }
+.progress-pill {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  border-radius: 999px; padding: 6px 14px; margin-bottom: 16px;
+  font-family: var(--mono); font-size: 11px; color: var(--text-3);
+}
+.progress-pill .progress { flex: 1; height: 4px; }
+#timerWrap { margin-bottom: 16px; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="play-wrap">
+
+  <!-- TOKEN BANNER -->
+  <div class="token-banner" id="tokenBanner">
+    <span style="color:var(--text-3);font-size:11px;">TOKEN</span>
+    <span class="tb-tok">{{ token }}</span>
+    <span class="tb-team" id="teamLabel">{{ session.team }}</span>
+    <span class="tb-score" id="scoreLabel">🏆 <span id="scoreVal">{{ session.score }}</span></span>
+  </div>
+
+  <!-- STEPPER -->
+  <div class="stepper" id="stepperWrap">
+    {% for i in range(phase_count) %}
+    <div class="step-dot {% if i < phase_idx %}done{% elif i == phase_idx %}active{% endif %}" id="step{{ i }}">F{{ i+1 }}</div>
+    {% endfor %}
+  </div>
+
+  <!-- ROLE CARD (collapsible) -->
+  <details style="margin-bottom:16px;">
+    <summary style="cursor:pointer;padding:12px 16px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:var(--radius);font-family:var(--mono);font-size:12px;letter-spacing:1px;color:var(--text-3);list-style:none;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:20px;">{{ role.icon }}</span>
+      <span>{{ session.team }} — Vaš operativni profil</span>
+      <span style="margin-left:auto;font-size:10px;">▾</span>
+    </summary>
+    <div class="role-card mt-8">
+      <div class="role-body">
+        <div class="role-section">
+          <div class="role-section-label">Uloga</div>
+          <p>{{ role.role }}</p>
+        </div>
+        <div class="role-section secret">
+          <div class="role-section-label">🔒 Poverljivo</div>
+          <p>{{ role.secret }}</p>
+        </div>
+        <div class="role-section dilemma">
+          <div class="role-section-label">⚡ Dilema</div>
+          <p>{{ role.dilemma }}</p>
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <!-- COUNTDOWN TIMER -->
+  <div id="timerWrap" style="display:none;">
+    <div class="countdown" id="countdown">
+      <div class="countdown-label">VREME ZA ODGOVOR</div>
+      <div class="countdown-time" id="cdTime">06:00</div>
+      <div class="countdown-sub" id="cdSub">Faza {{ phase_idx + 1 }}</div>
+      <div class="countdown-bar"><div class="countdown-bar-fill" id="cdBar" style="width:100%"></div></div>
+    </div>
+  </div>
+
+  <!-- ─── IDLE: Not started ─────────────────────────────── -->
+  <div id="idleSection">
+    {% if phase %}
+      <div class="phase-card mb-16">
+        <div class="phase-header">
+          <span class="badge badge-red">Operation Black Grid</span>
+          <span class="phase-clock">{{ phase.clock }}</span>
+          <span class="phase-num">F{{ phase_idx + 1 }} / {{ phase_count }}</span>
+        </div>
+        <div class="phase-title-text">{{ phase.title }}</div>
+        <div class="phase-narrative">{{ phase.narrative }}</div>
+        <div class="phase-visual-wrap">
+          <div class="phase-visual-label">📄 DOKAZNI MATERIJAL</div>
+          <div class="phase-visual">{{ phase.visual }}</div>
+          <div class="phase-inject-label">📢 LIVE INJECT</div>
+          <div class="phase-inject">{{ phase.inject }}</div>
+        </div>
+      </div>
+      {% if phase_idx <= unlocked %}
+        <button class="btn btn-primary btn-full" id="startBtn" onclick="startPhase()">
+          ▶&nbsp; Pokreni Fazu {{ phase_idx + 1 }}
+        </button>
+      {% else %}
+        <div class="phase-lock-msg">
+          <div class="lock-icon">🔒</div>
+          <h3>Faza {{ phase_idx + 1 }} je zaključana</h3>
+          <p class="text-dim mt-8">Sačekajte da moderator otključa sledeću fazu.</p>
+        </div>
+      {% endif %}
+    {% else %}
+      <div class="card text-center">
+        <div style="font-size:40px;margin-bottom:12px;">🏆</div>
+        <h2>Vežba završena!</h2>
+        <p class="text-dim mt-8">Sačekajte moderatora za debriefing.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- ─── PHASE ACTIVE: Questions ──────────────────────── -->
+  <div id="phaseSection">
+    <div class="phase-card mb-16" id="phaseCardActive"></div>
+
+    <!-- Q1: Shared -->
+    <div class="card mb-12" id="qBlock0">
+      <div class="q-num">❶ ZAJEDNIČKO PITANJE — svi timovi</div>
+      <div class="q-text" id="qText0"></div>
+      <div class="answer-opts" id="qOpts0"></div>
+    </div>
+
+    <!-- Q2-Q4: Team specific -->
+    {% for qi in [1,2,3] %}
+    <div class="card mb-12" id="qBlock{{ qi }}">
+      <div class="q-num">{{ ['❷','❸','❹'][qi-1] }} TIM PITANJE — {{ session.team }}</div>
+      <div class="q-text" id="qText{{ qi }}"></div>
+      <div class="answer-opts" id="qOpts{{ qi }}"></div>
+    </div>
+    {% endfor %}
+
+    <!-- Progress + Submit -->
+    <div class="progress-pill" id="progressPill">
+      <span id="progressTxt">0 / 4 pitanja</span>
+      <div class="progress">
+        <div class="progress-bar" id="progressBar" style="width:0%;background:var(--text-muted);"></div>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-full" id="submitBtn" onclick="submitAnswers()" disabled>
+      Predaj individualni odgovor
+    </button>
+  </div>
+
+  <!-- ─── WAIT: Waiting for team ───────────────────────── -->
+  <div id="waitSection">
+    <div class="waiting-box">
+      <div class="waiting-icon">⏳</div>
+      <div class="waiting-title">Čekanje na tim</div>
+      <p class="waiting-text" id="waitText">Čekanje na ostale članove tima…</p>
+      <div class="waiting-pulse"></div>
+    </div>
+    <div class="mt-16" id="teamStatusWrap"></div>
+  </div>
+
+  <!-- ─── CONSENSUS: Team answers ──────────────────────── -->
+  <div id="answersSection">
+    <div class="kicker mb-12">Korak 2 od 2 — Timski konsenzus</div>
+    <div class="card mb-16" id="indAnswersCard">
+      <!-- filled by JS -->
+    </div>
+    <!-- Consensus dropdowns Q1-Q4 -->
+    <div class="card">
+      <div class="kicker mb-16" style="color:var(--blue-light);">Glasajte za timski odgovor</div>
+      <div class="form-stack" id="consensusForm"></div>
+      <button class="btn btn-primary btn-full mt-16" id="consensusBtn" onclick="submitConsensus()">
+        Predaj timski konsenzus
+      </button>
+    </div>
+  </div>
+
+  <!-- ─── RESULT ─────────────────────────────────────────── -->
+  <div id="resultSection">
+    <div class="kicker mb-12" style="color:var(--blue-light);">Rezultat faze</div>
+    <div id="resultContent"></div>
+    <div class="mt-16" id="nextBtnWrap" style="display:none;">
+      <button class="btn btn-primary btn-full" onclick="goNextPhase()">
+        Sledeća faza ▶
+      </button>
+    </div>
+    <div class="waiting-box mt-16" id="waitNextBox" style="display:none;">
+      <div class="waiting-icon">⏸️</div>
+      <div class="waiting-title">Čekanje na moderatora</div>
+      <p class="waiting-text">Faza završena. Moderator otvara sledeću fazu posle debriefinga.</p>
+      <div class="waiting-pulse"></div>
+    </div>
+  </div>
+
+  <!-- ─── DONE ──────────────────────────────────────────── -->
+  <div id="doneSection" class="card text-center" style="padding:40px 24px;">
+    <div style="font-size:44px;margin-bottom:12px;">🏆</div>
+    <h2>Vežba završena!</h2>
+    <p class="text-dim mt-8">Sačekajte moderatora za debriefing i finalnu analizu.</p>
+  </div>
+
+  <!-- ─── MODERATOR MESSAGES ─────────────────────────────── -->
+  <div class="mt-24">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div class="kicker">✉️ Moderatorske poruke</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadInjects()">↻ Osveži</button>
+    </div>
+    <div id="injectsList"><div class="card-inset text-dim text-sm">Nema novih poruka.</div></div>
+
+    <div class="form-row mt-12">
+      <div class="input-group">
+        <label class="input-label" for="injId">ID poruke</label>
+        <input class="input" id="injId" placeholder="abc123" autocomplete="off">
+      </div>
+      <div class="input-group">
+        <label class="input-label" for="injResp">Vaš odgovor</label>
+        <input class="input" id="injResp" placeholder="Odgovor timu…">
+      </div>
+    </div>
+    <button class="btn btn-secondary btn-full mt-8" onclick="sendInjectResp()">📨 Pošalji odgovor</button>
+    <div id="injStatus" class="mt-8"></div>
+  </div>
+
+  <!-- ─── MEDIA FEED ────────────────────────────────────── -->
+  <div class="mt-24">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div class="kicker">📺 Live media feed</div>
+      <span class="badge badge-muted mono" style="font-size:9px;">auto · 10s</span>
+    </div>
+    <div id="mediaFeed"><div class="card-inset text-dim text-sm">Nema novih objava.</div></div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOKEN    = '{{ token }}';
+const PHASE_COUNT = {{ phase_count }};
+let currentPhase = {{ phase_idx }};
+let selected = [null, null, null, null];
+let phaseData = null;  // loaded from server
+let pollInterval = null;
+let timerInterval = null;
+let timerStart = null;
+const TIMER_TOTAL = 360; // 6 minutes
+
+// ── PHASE DATA (preloaded from Jinja) ─────────────────────────────────────────
+const PHASES_JSON = {{ phases_json|safe }};
+
+// ── SECTION SWITCHER ──────────────────────────────────────────────────────────
+function show(sectionId) {
+  ['idleSection','phaseSection','waitSection','answersSection','resultSection','doneSection']
+    .forEach(id => document.getElementById(id).style.display = 'none');
+  document.getElementById(sectionId).style.display = 'block';
+}
+
+// ── TIMER ─────────────────────────────────────────────────────────────────────
+function startTimer(elapsed=0) {
+  document.getElementById('timerWrap').style.display='block';
+  timerStart = Date.now() - elapsed * 1000;
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = setInterval(updateTimer, 500);
+  updateTimer();
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  document.getElementById('timerWrap').style.display='none';
+}
+
+function updateTimer() {
+  const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+  const rem = Math.max(0, TIMER_TOTAL - elapsed);
+  const m = Math.floor(rem/60), s = rem%60;
+  const pct = (rem/TIMER_TOTAL*100).toFixed(1);
+  const disp = `${m}:${s.toString().padStart(2,'0')}`;
+  const el = document.getElementById('cdTime');
+  const bar = document.getElementById('cdBar');
+  if(el) el.textContent = disp;
+  if(bar) bar.style.width = pct + '%';
+  const cd = document.getElementById('countdown');
+  if(rem === 0) { cd.classList.add('expired'); cd.classList.remove('warn'); }
+  else if(rem <= 60) { cd.classList.add('warn'); }
+  else { cd.classList.remove('warn','expired'); }
+}
+
+// ── STEPPER UPDATE ─────────────────────────────────────────────────────────────
+function updateStepper(phaseIdx) {
+  for(let i=0;i<PHASE_COUNT;i++){
+    const el=document.getElementById(`step${i}`);
+    if(!el)continue;
+    el.className='step-dot';
+    if(i<phaseIdx) el.classList.add('done');
+    else if(i===phaseIdx) el.classList.add('active');
+  }
+}
+
+// ── START PHASE ───────────────────────────────────────────────────────────────
+async function startPhase() {
+  const btn = document.getElementById('startBtn');
+  setLoading(btn, true);
+  const r = await api('/api/start_phase', {token: TOKEN});
+  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); return; }
+  loadPhaseUI();
+}
+
+function loadPhaseUI() {
+  const p = PHASES_JSON[currentPhase];
+  if (!p) { show('doneSection'); return; }
+
+  // Fill phase card
+  const card = document.getElementById('phaseCardActive');
+  card.innerHTML = `
+    <div class="phase-header">
+      <span class="badge badge-red">Operation Black Grid</span>
+      <span class="phase-clock">${p.clock}</span>
+      <span class="phase-num">F${currentPhase+1} / ${PHASE_COUNT}</span>
+    </div>
+    <div class="phase-title-text">${p.title}</div>
+    <div class="phase-narrative">${p.narrative}</div>
+    <div class="phase-visual-wrap">
+      <div class="phase-visual-label">📄 DOKAZNI MATERIJAL</div>
+      <div class="phase-visual">${p.visual}</div>
+      <div class="phase-inject-label">📢 LIVE INJECT</div>
+      <div class="phase-inject">${p.inject}</div>
+    </div>`;
+
+  // Fill questions
+  const team = '{{ session.team }}';
+  const qs = p.questions;
+  const allQ = [qs.shared, ...(qs[team] || [['—',['—'],0,'—'],['—',['—'],0,'—'],['—',['—'],0,'—']])];
+  selected = [null,null,null,null];
+
+  allQ.forEach((q, qi) => {
+    document.getElementById(`qText${qi}`).textContent = q[0];
+    const optsEl = document.getElementById(`qOpts${qi}`);
+    optsEl.innerHTML = '';
+    q[1].forEach((opt, oi) => {
+      const btn = document.createElement('button');
+      btn.className = 'opt-btn';
+      btn.textContent = opt;
+      btn.onclick = () => selectOpt(qi, oi, opt, btn, optsEl);
+      optsEl.appendChild(btn);
+    });
+  });
+
+  updateProgress();
+  startTimer(0);
+  show('phaseSection');
+  updateStepper(currentPhase);
+  startPoll();
+}
+
+function selectOpt(qi, oi, val, btn, container) {
+  container.querySelectorAll('.opt-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  selected[qi] = val;
+  updateProgress();
+}
+
+function updateProgress() {
+  const answered = selected.filter(s=>s!==null).length;
+  document.getElementById('progressTxt').textContent = `${answered} / 4 pitanja`;
+  const pct = answered/4*100;
+  const bar = document.getElementById('progressBar');
+  bar.style.width = pct+'%';
+  bar.style.background = pct===100?'#22c55e':pct>0?'var(--blue)':'var(--text-muted)';
+  document.getElementById('submitBtn').disabled = answered < 4;
+}
+
+// ── SUBMIT INDIVIDUAL ─────────────────────────────────────────────────────────
+async function submitAnswers() {
+  if (selected.some(s=>s===null)) { toast('Odgovorite na sva 4 pitanja.','error'); return; }
+  const btn = document.getElementById('submitBtn');
+  setLoading(btn, true);
+  const r = await api('/api/submit_individual', {token: TOKEN, answers: selected});
+  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); return; }
+  toast('Individualni odgovor predat!','success');
+  show('waitSection');
+  document.getElementById('waitText').textContent =
+    `${r.submitted} / ${r.total} članova predalo odgovor`;
+  buildTeamStatus(r.submitted, r.total);
+  // poll until all submitted
+}
+
+function buildTeamStatus(sub, tot) {
+  const el = document.getElementById('teamStatusWrap');
+  el.innerHTML = `<div class="card-inset" style="font-family:var(--mono);font-size:12px;color:var(--text-3);">
+    Predato: <span style="color:#fff;font-weight:700;">${sub}/${tot}</span> članova
+    <div class="progress mt-8"><div class="progress-bar" style="width:${Math.round(sub/tot*100)}%;background:var(--blue);"></div></div>
+  </div>`;
+}
+
+// ── POLL ──────────────────────────────────────────────────────────────────────
+function startPoll() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(doPoll, 3000);
+}
+
+async function doPoll() {
+  try {
+    const r = await api(`/api/phase_state?token=${TOKEN}`);
+    if (!r.ok) return;
+    // Update score
+    document.getElementById('scoreVal').textContent = r.score;
+    document.getElementById('scoreBadge').textContent = `🏆 ${r.score} pts`;
+
+    if (r.session_expired) {
+      clearInterval(pollInterval);
+      toast('Sesija je istekla. Prijavite se ponovo.','error');
+      setTimeout(()=>window.location.href='/',2000);
+      return;
+    }
+
+    const currentView = getCurrentView();
+    if (currentView === 'waitSection') {
+      buildTeamStatus(r.submitted_count, r.total_members);
+      document.getElementById('waitText').textContent =
+        `${r.submitted_count} / ${r.total_members} članova predalo odgovor`;
+      if (r.submitted_count >= r.total_members && r.total_members > 0) {
+        // All submitted — show consensus
+        showConsensus();
+      }
+    } else if (currentView === 'resultSection') {
+      if (r.next_available) {
+        document.getElementById('nextBtnWrap').style.display='block';
+        document.getElementById('waitNextBox').style.display='none';
+      }
+    }
+  } catch(e) {}
+}
+
+function getCurrentView() {
+  const ids = ['idleSection','phaseSection','waitSection','answersSection','resultSection','doneSection'];
+  return ids.find(id => document.getElementById(id).style.display !== 'none') || 'idleSection';
+}
+
+// ── CONSENSUS ─────────────────────────────────────────────────────────────────
+function showConsensus() {
+  clearInterval(pollInterval);
+  const p = PHASES_JSON[currentPhase];
+  const team = '{{ session.team }}';
+  const qs = p.questions;
+  const allQ = [qs.shared, ...(qs[team] || [])];
+
+  // Show individual answers summary
+  const card = document.getElementById('indAnswersCard');
+  card.innerHTML = `<div class="kicker mb-12">Vaši individualni odgovori</div>` +
+    selected.map((ans, i) => `
+      <div class="card-inset mb-8">
+        <div class="text-xs text-dim mb-4">Pitanje ${i+1}: ${allQ[i][0]}</div>
+        <div style="font-size:14px;color:#fff;font-weight:600;">${ans || '—'}</div>
+      </div>`).join('');
+
+  // Build consensus dropdowns
+  const form = document.getElementById('consensusForm');
+  form.innerHTML = allQ.map((q, qi) => `
+    <div class="input-group">
+      <label class="input-label">Konsenzus ${['❶','❷','❸','❹'][qi]}: ${q[0].substring(0,60)}${q[0].length>60?'…':''}</label>
+      <select class="input" id="cq${qi}">
+        <option value="">Izaberite timski odgovor…</option>
+        ${q[1].map(opt=>`<option value="${opt}">${opt}</option>`).join('')}
+      </select>
+    </div>`).join('');
+
+  show('answersSection');
+}
+
+async function submitConsensus() {
+  const answers = [0,1,2,3].map(i => document.getElementById(`cq${i}`)?.value || '');
+  if (answers.some(a=>!a)) { toast('Odaberite timski odgovor za sva pitanja.','error'); return; }
+  const btn = document.getElementById('consensusBtn');
+  setLoading(btn, true);
+  const r = await api('/api/submit_consensus', {token: TOKEN, answers});
+  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); return; }
+  stopTimer();
+  showResults(r);
+}
+
+// ── RESULTS ───────────────────────────────────────────────────────────────────
+function showResults(r) {
+  clearInterval(pollInterval);
+  const el = document.getElementById('resultContent');
+  const okCnt = r.results.filter(x=>x.ok).length;
+  const pctOk = Math.round(okCnt/r.results.length*100);
+
+  let html = `
+    <div class="card mb-12" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;">
+        <div class="kicker">Ukupan skor faze</div>
+        <div style="font-family:var(--mono);font-size:36px;font-weight:700;color:#fff;">${r.gained}<span style="font-size:16px;color:var(--text-3);">/${r.max}</span></div>
+        <div class="text-dim text-sm mt-4">Tačnost: ${pctOk}%</div>
+      </div>
+      <div class="progress" style="width:80px;height:80px;border-radius:50%;background:conic-gradient(var(--blue) ${pctOk}%, rgba(255,255,255,.07) 0);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <div style="background:var(--surface);width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:16px;font-weight:700;color:#fff;">${pctOk}%</div>
+      </div>
+    </div>`;
+
+  r.results.forEach((res, i) => {
+    html += `<div class="result-item ${res.ok?'ok':'bad'} mb-8">
+      <div class="result-q">${res.ok?'✅':'❌'} ${res.question}</div>
+      <div class="result-row"><span style="color:var(--text-muted);">Odgovor:</span> ${res.selected}</div>
+      ${!res.ok?`<div class="result-row"><span style="color:var(--text-muted);">Tačno:</span> ${res.correct}</div>`:''}
+      <div class="result-expl">💡 ${res.explain}</div>
+    </div>`;
+  });
+
+  el.innerHTML = html;
+  show('resultSection');
+
+  // Check if more phases
+  if (currentPhase + 1 >= PHASE_COUNT) {
+    document.getElementById('nextBtnWrap').style.display='none';
+    document.getElementById('waitNextBox').style.display='none';
+    document.getElementById('doneSection').style.display='block';
+  } else {
+    document.getElementById('waitNextBox').style.display='block';
+    startPoll(); // poll for moderator unlock
+  }
+}
+
+// ── NEXT PHASE ────────────────────────────────────────────────────────────────
+async function goNextPhase() {
+  const r = await api('/api/next_phase', {token: TOKEN});
+  if (!r.ok) { toast(r.error,'error'); return; }
+  currentPhase = r.phase;
+  selected = [null,null,null,null];
+  updateStepper(currentPhase);
+
+  // Re-render idle section for new phase
+  const p = PHASES_JSON[currentPhase];
+  const idleEl = document.getElementById('idleSection');
+  idleEl.innerHTML = `
+    <div class="phase-card mb-16">
+      <div class="phase-header">
+        <span class="badge badge-red">Operation Black Grid</span>
+        <span class="phase-clock">${p.clock}</span>
+        <span class="phase-num">F${currentPhase+1} / ${PHASE_COUNT}</span>
+      </div>
+      <div class="phase-title-text">${p.title}</div>
+      <div class="phase-narrative">${p.narrative}</div>
+      <div class="phase-visual-wrap">
+        <div class="phase-visual-label">📄 DOKAZNI MATERIJAL</div>
+        <div class="phase-visual">${p.visual}</div>
+        <div class="phase-inject-label">📢 LIVE INJECT</div>
+        <div class="phase-inject">${p.inject}</div>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-full" id="startBtn" onclick="startPhase()">▶&nbsp; Pokreni Fazu ${currentPhase+1}</button>`;
+  show('idleSection');
+  clearInterval(pollInterval);
+}
+
+// ── INJECTS ───────────────────────────────────────────────────────────────────
+async function loadInjects() {
+  const r = await api(`/api/injects?token=${TOKEN}`, null, 'GET');
+  const el = document.getElementById('injectsList');
+  if (!r.length) { el.innerHTML='<div class="card-inset text-dim text-sm">Nema novih poruka.</div>'; return; }
+  el.innerHTML = r.slice().reverse().map(x=>`
+    <div class="inject-item">
+      <div class="inject-meta">
+        <span class="inject-sender">${x.sender}</span>
+        <span class="inject-time">${x.time}</span>
+        <span class="badge badge-amber" style="font-size:9px;">⏳ ${x.deadline}min</span>
+      </div>
+      <div class="inject-id">ID: <code style="font-family:var(--mono);font-size:11px;">${x.id}</code></div>
+      <div class="inject-msg">${x.msg}</div>
+    </div>`).join('');
+}
+
+async function sendInjectResp() {
+  const id   = document.getElementById('injId').value.trim();
+  const text = document.getElementById('injResp').value.trim();
+  const st   = document.getElementById('injStatus');
+  if (!id||!text){st.innerHTML='<div class="alert alert-error">Unesite ID i odgovor.</div>';return;}
+  const r = await api('/api/respond_inject',{token:TOKEN,inject_id:id,text});
+  st.innerHTML = r.ok
+    ? '<div class="alert alert-success">✓ Odgovor poslat.</div>'
+    : `<div class="alert alert-error">${r.error}</div>`;
+  if(r.ok){document.getElementById('injId').value='';document.getElementById('injResp').value='';}
+}
+
+// ── MEDIA FEED ────────────────────────────────────────────────────────────────
+async function loadMedia() {
+  const r = await api(`/api/media_feed?token=${TOKEN}`, null, 'GET');
+  const el = document.getElementById('mediaFeed');
+  if (!r.length) { el.innerHTML='<div class="card-inset text-dim text-sm">Nema novih objava.</div>'; return; }
+  el.innerHTML = r.slice().reverse().map(x=>`
+    <div class="media-item ${x.kind==='breaking'?'breaking':x.sentiment||''}">
+      <div class="media-head">
+        <span class="media-channel">${x.channel||''}</span>
+        <span class="media-time">${x.time}</span>
+        ${x.kind==='breaking'?'<span class="badge badge-red">🚨 BREAKING</span>':''}
+      </div>
+      <div class="media-body">
+        <span class="media-icon">${x.icon||'📰'}</span>
+        <span class="media-text">${x.text}</span>
+      </div>
+    </div>`).join('');
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+(function init() {
+  loadInjects();
+  loadMedia();
+  setInterval(loadInjects, 15000);
+  setInterval(loadMedia, 10000);
+})();
+</script>
+{% endblock %}

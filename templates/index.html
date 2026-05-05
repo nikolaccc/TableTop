@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %} — Prijava{% endblock %}
+
+{% block extra_head %}
+<style>
+.login-hero {
+  padding: 48px 0 36px;
+  text-align: center;
+}
+.login-hero .display { margin-bottom: 12px; }
+.login-hero .kicker  { margin-bottom: 20px; justify-content: center; display: flex; gap: 10px; align-items: center; }
+.login-hero .kicker::before, .login-hero .kicker::after {
+  content: ''; height: 1px; width: 40px; background: var(--border);
+}
+.login-wrap { max-width: 520px; margin: 0 auto; padding: 0 var(--page-x) 64px; }
+.login-panel {
+  background: linear-gradient(160deg, rgba(15,32,64,.95), rgba(10,22,40,.98));
+  border: 1px solid var(--border-2);
+  border-radius: 20px;
+  padding: clamp(20px, 5vw, 36px);
+  box-shadow: 0 32px 80px rgba(0,0,0,.5);
+}
+.login-panel .form-stack { gap: 18px; }
+.mode-toggle {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+}
+.mode-btn {
+  padding: 10px; border-radius: 7px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: 1px;
+  text-transform: uppercase; cursor: pointer; border: none;
+  background: transparent; color: var(--text-3); transition: all .18s;
+}
+.mode-btn.active { background: var(--red); color: #fff; }
+.code-hint { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 4px; }
+.rejoin-block { margin-top: 28px; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="page">
+  <div class="login-hero">
+    <div class="kicker red">⚡ Tabletop Cyber Crisis Simulation</div>
+    <h1 class="display">Operation<br><em>Black Grid</em></h1>
+    <p style="color:var(--text-2);font-size:15px;max-width:380px;margin:0 auto;">
+      Enterprise simulacija sajber krize. Šest timova. Tri kritične faze.
+    </p>
+  </div>
+
+  <div class="login-wrap">
+    <div class="login-panel">
+      <div class="kicker" style="margin-bottom:20px;">Pristup sistemu</div>
+
+      <!-- Mode toggle -->
+      <div class="mode-toggle" id="modeToggle">
+        <button class="mode-btn active" data-mode="student" onclick="setMode('student',this)">Učesnik</button>
+        <button class="mode-btn" data-mode="moderator" onclick="setMode('moderator',this)">Moderator</button>
+      </div>
+
+      <div class="form-stack mt-16" id="loginForm">
+        <div class="input-group" id="nameGroup">
+          <label class="input-label" for="loginName">Ime i prezime</label>
+          <input class="input" id="loginName" type="text" placeholder="npr. Marija Jović" autocomplete="name">
+        </div>
+
+        <div class="input-group" id="teamGroup">
+          <label class="input-label" for="loginTeam">Tim</label>
+          <select class="input" id="loginTeam">
+            <option value="">Izaberite tim…</option>
+            {% for team in teams %}
+            <option value="{{ team }}">{{ team }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="input-group" id="codeGroup">
+          <label class="input-label" for="loginCode">Kod vežbe</label>
+          <input class="input" id="loginCode" type="password" placeholder="••••••••" autocomplete="one-time-code">
+          <div class="code-hint">Dobijate od moderatora vežbe</div>
+        </div>
+
+        <div class="input-group hidden" id="pwGroup">
+          <label class="input-label" for="loginPw">Moderator lozinka</label>
+          <input class="input" id="loginPw" type="password" placeholder="••••••••" autocomplete="current-password">
+        </div>
+
+        <div id="loginError" class="alert alert-error hidden"></div>
+
+        <button class="btn btn-primary btn-full" id="loginBtn" onclick="doLogin()">
+          Prijavi se
+        </button>
+      </div>
+
+      <div class="rejoin-block">
+        <div class="divider-text"><span>Nastavi postojeću sesiju</span></div>
+        <div style="display:flex;gap:8px;">
+          <input class="input" id="rejoinToken" placeholder="BG-XXXXXXXX" style="flex:1;min-width:0;" autocomplete="off" spellcheck="false">
+          <button class="btn btn-secondary" onclick="doRejoin()" style="flex-shrink:0;white-space:nowrap;">↩ Nastavi</button>
+        </div>
+        <div id="rejoinError" class="alert alert-error hidden mt-8"></div>
+      </div>
+    </div>
+
+    <!-- Info pills -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:20px;">
+      <span class="badge badge-muted">6 timova</span>
+      <span class="badge badge-muted">3 faze</span>
+      <span class="badge badge-muted">Real-time scoring</span>
+      <span class="badge badge-red">EDG · Sajber kriza</span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentMode = 'student';
+
+function setMode(mode, btn) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const isMod = mode === 'moderator';
+  document.getElementById('nameGroup').classList.toggle('hidden', isMod);
+  document.getElementById('teamGroup').classList.toggle('hidden', isMod);
+  document.getElementById('codeGroup').classList.toggle('hidden', isMod);
+  document.getElementById('pwGroup').classList.toggle('hidden', !isMod);
+  document.getElementById('loginError').classList.add('hidden');
+}
+
+async function doLogin() {
+  const btn = document.getElementById('loginBtn');
+  const err = document.getElementById('loginError');
+  err.classList.add('hidden');
+  setLoading(btn, true);
+
+  const body = {
+    name: document.getElementById('loginName').value.trim(),
+    team: document.getElementById('loginTeam').value,
+    mode: currentMode,
+    exercise_code: document.getElementById('loginCode').value,
+    password: document.getElementById('loginPw').value,
+  };
+
+  try {
+    const r = await api('/api/login', body);
+    if (r.ok) {
+      localStorage.setItem('bg_token', r.token);
+      window.location.href = r.redirect;
+    } else {
+      err.textContent = r.error || 'Greška pri prijavi.';
+      err.classList.remove('hidden');
+      setLoading(btn, false);
+    }
+  } catch(e) {
+    err.textContent = 'Greška konekcije. Pokušajte ponovo.';
+    err.classList.remove('hidden');
+    setLoading(btn, false);
+  }
+}
+
+async function doRejoin() {
+  const token = document.getElementById('rejoinToken').value.trim().toUpperCase();
+  const err   = document.getElementById('rejoinError');
+  err.classList.add('hidden');
+  if (!token) { err.textContent='Unesite token.'; err.classList.remove('hidden'); return; }
+  const r = await api('/api/rejoin', {token});
+  if (r.ok) {
+    localStorage.setItem('bg_token', r.token);
+    window.location.href = r.redirect;
+  } else {
+    err.textContent = r.error || 'Token nije pronađen.';
+    err.classList.remove('hidden');
+  }
+}
+
+// Enter key support
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (document.activeElement?.id === 'rejoinToken') doRejoin();
+    else doLogin();
+  }
+});
+
+// Check if already logged in
+const storedToken = localStorage.getItem('bg_token');
+if (storedToken) {
+  fetch(`/api/phase_state?token=${storedToken}`)
+    .then(r=>r.json())
+    .then(d => { if(d.ok) window.location.href=`/play?token=${storedToken}`; })
+    .catch(()=>{});
+}
+</script>
+{% endblock %}

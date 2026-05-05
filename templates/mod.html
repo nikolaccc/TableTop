@@ -1,0 +1,401 @@
+{% extends "base.html" %}
+{% block title %} — Moderator Panel{% endblock %}
+
+{% block topbar_right %}
+<span class="badge badge-red mono">MOD</span>
+<span class="badge badge-muted mono" style="font-size:10px;">{{ token }}</span>
+<a href="/" class="btn btn-ghost btn-sm">← Izlaz</a>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.mod-wrap { max-width: 1100px; margin: 0 auto; padding: 20px var(--page-x) 64px; }
+.mod-header { margin-bottom: 24px; }
+.stat-grid-mod { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 24px; }
+@media(max-width:640px){ .stat-grid-mod { grid-template-columns: repeat(2,1fr); } }
+.inject-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.preset-pill {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .5px;
+  padding: 6px 12px; border-radius: 999px;
+  background: rgba(255,255,255,.05); border: 1px solid var(--border);
+  color: var(--text-3); cursor: pointer; transition: all .18s;
+}
+.preset-pill:hover { border-color: var(--blue); color: var(--blue-light); }
+.preset-pill.active { border-color: var(--blue); background: rgba(42,109,217,.15); color: var(--blue-light); }
+.teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 12px; }
+.events-list { font-family: var(--mono); font-size: 12px; }
+.events-list .ev { padding: 8px 0; border-bottom: 1px solid var(--border); display: flex; gap: 12px; flex-wrap: wrap; }
+.ev-time { color: var(--text-muted); min-width: 70px; }
+.ev-kind { color: var(--blue-light); min-width: 140px; }
+.ev-team { color: var(--text-2); }
+.ev-det  { color: var(--text-3); overflow-wrap: anywhere; }
+.ltc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="mod-wrap">
+  <div class="mod-header">
+    <div class="kicker red mb-4">Moderator Control Panel</div>
+    <h1 class="display-sm">Operation <em style="color:var(--red);">Black Grid</em></h1>
+  </div>
+
+  <!-- STAT STRIP -->
+  <div class="stat-grid-mod" id="statStrip">
+    <div class="stat-box"><div class="stat-val" id="stSessions">—</div><div class="stat-lbl">Sesija</div></div>
+    <div class="stat-box"><div class="stat-val" id="stTeams">—</div><div class="stat-lbl">Timova</div></div>
+    <div class="stat-box"><div class="stat-val" id="stInjects">—</div><div class="stat-lbl">Injects</div></div>
+    <div class="stat-box"><div class="stat-val" id="stResp">—</div><div class="stat-lbl">Odgovora</div></div>
+  </div>
+
+  <!-- TABS -->
+  <div data-tabs>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tabDash">📊 Dashboard</button>
+      <button class="tab-btn" data-tab="tabInjects">✉️ Injects</button>
+      <button class="tab-btn" data-tab="tabBreaking">🚨 Breaking</button>
+      <button class="tab-btn" data-tab="tabScore">🏆 Skor</button>
+      <button class="tab-btn" data-tab="tabEvents">📋 Log</button>
+      <button class="tab-btn" data-tab="tabReset">⚙️ Reset</button>
+    </div>
+
+    <!-- ── DASHBOARD ── -->
+    <div class="tab-panel active" id="tabDash">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div class="kicker">Live status timova</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadDash()">↻ Osveži</button>
+      </div>
+      <div class="alert alert-info mb-16">
+        <strong>Otključavanje faze:</strong> Kliknite dugme ispod tima kada je tim završio konsenzus i spreman je za sledeću fazu.
+      </div>
+      <div class="teams-grid" id="teamsGrid">
+        <div class="card text-dim text-sm">Učitavanje…</div>
+      </div>
+
+      <div class="mt-24">
+        <div class="kicker mb-12">Otključaj fazu za SVE timove odjednom</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+          <div class="input-group" style="flex:1;min-width:160px;">
+            <label class="input-label" for="unlockAllPhase">Faza (1–{{ phases|length }})</label>
+            <select class="input" id="unlockAllPhase">
+              {% for i in range(phases|length) %}
+              <option value="{{ i }}">Faza {{ i+1 }}: {{ phases[i].title[:40] }}…</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn btn-secondary" onclick="unlockAll()" style="height:var(--tap);">🔓 Otključaj sve</button>
+        </div>
+        <div id="unlockAllStatus" class="mt-8"></div>
+      </div>
+    </div>
+
+    <!-- ── INJECTS ── -->
+    <div class="tab-panel" id="tabInjects">
+      <div class="kicker mb-16">Pošalji moderatorsku poruku timu</div>
+
+      <div class="inject-presets" id="presetBtns">
+        {% for sender in presets %}
+        <button class="preset-pill {% if loop.first %}active{% endif %}" onclick="loadPreset('{{ sender }}',this)">{{ sender }}</button>
+        {% endfor %}
+      </div>
+
+      <div class="form-stack" style="gap:14px;">
+        <div class="form-row">
+          <div class="input-group">
+            <label class="input-label" for="injSender">Pošiljalac</label>
+            <input class="input" id="injSender" value="Novinar" placeholder="Novinar, Poverenik…">
+          </div>
+          <div class="input-group">
+            <label class="input-label" for="injTarget">Ciljni tim</label>
+            <select class="input" id="injTarget">
+              <option value="Svi timovi">Svi timovi</option>
+              {% for team in teams %}
+              <option value="{{ team }}">{{ team }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Predefinisane poruke</label>
+          <div id="presetMsgList" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto;">
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label" for="injMsg">Ili vlastita poruka</label>
+          <textarea class="input" id="injMsg" rows="3" placeholder="Unesite tekst…" style="min-height:80px;resize:vertical;"></textarea>
+        </div>
+
+        <div class="input-group" style="max-width:200px;">
+          <label class="input-label" for="injDeadline">Rok odgovora (minuta)</label>
+          <input class="input" id="injDeadline" type="number" value="5" min="1" max="30">
+        </div>
+
+        <button class="btn btn-primary" onclick="sendInject()" style="max-width:240px;">📨 Pošalji poruku</button>
+        <div id="injStatus"></div>
+      </div>
+
+      <div class="mt-24">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div class="kicker">Log poslatih poruka</div>
+          <button class="btn btn-ghost btn-sm" onclick="loadRespLog()">↻</button>
+        </div>
+        <div id="injLog"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
+      </div>
+    </div>
+
+    <!-- ── BREAKING NEWS ── -->
+    <div class="tab-panel" id="tabBreaking">
+      <div class="kicker mb-4">Pošalji breaking news</div>
+      <div class="alert alert-warn mb-16">
+        Breaking news poruke su vidljive svim učesnicima u Live Media Feed-u. Neodgovaranje nosi penal od -2 poena.
+      </div>
+      <div class="form-stack" style="gap:14px;">
+        <div class="form-row">
+          <div class="input-group">
+            <label class="input-label" for="brTarget">Ciljni tim</label>
+            <select class="input" id="brTarget">
+              <option value="Svi">Svi timovi</option>
+              {% for team in teams %}
+              <option value="{{ team }}">{{ team }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="input-group">
+            <label class="input-label" for="brChannel">Kanal</label>
+            <select class="input" id="brChannel">
+              <option>TWITTER</option><option>RTS UŽIVO</option><option>POVERENIK</option>
+              <option>AMBASADA</option><option>BORSA</option><option>TUŽILAŠTVO</option>
+              <option>VLADA</option><option>NEWSWEEK</option><option>MODERATOR</option>
+            </select>
+          </div>
+        </div>
+        <div class="input-group">
+          <label class="input-label" for="brText">Tekst breaking news poruke</label>
+          <textarea class="input" id="brText" rows="3" placeholder="Hitno: …" style="min-height:80px;resize:vertical;"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="sendBreaking()" style="max-width:240px;">🚨 Pošalji breaking news</button>
+        <div id="brStatus"></div>
+      </div>
+    </div>
+
+    <!-- ── SCOREBOARD ── -->
+    <div class="tab-panel" id="tabScore">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div class="kicker">Rang lista timova</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadScore()">↻ Osveži</button>
+      </div>
+      <div class="card" id="scoreList"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
+    </div>
+
+    <!-- ── EVENT LOG ── -->
+    <div class="tab-panel" id="tabEvents">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div class="kicker">Tok događaja (poslednji 100)</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadEvents()">↻ Osveži</button>
+      </div>
+      <div class="events-list" id="eventsList"><div class="text-dim text-sm">Kliknite Osveži.</div></div>
+    </div>
+
+    <!-- ── RESET ── -->
+    <div class="tab-panel" id="tabReset">
+      <div class="alert alert-error mb-16">
+        ⚠️ Ova akcija briše SVE sesije, skorove, odgovore i podatke vežbe bez mogućnosti povratka.
+        Koristite isključivo pre početka nove vežbe.
+      </div>
+      <div class="card" style="max-width:400px;">
+        <div class="input-group mb-12">
+          <label class="input-label" for="resetConfirm">Upišite "RESET" za potvrdu</label>
+          <input class="input" id="resetConfirm" placeholder="RESET">
+        </div>
+        <button class="btn btn-secondary btn-full" onclick="doReset()">🗑️ Resetuj vežbu</button>
+        <div id="resetStatus" class="mt-8"></div>
+      </div>
+    </div>
+
+  </div><!-- /data-tabs -->
+</div><!-- /mod-wrap -->
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MOD_TOKEN = '{{ token }}';
+const PRESETS_DATA = {{ presets_json|safe }};
+let currentPresetSender = '{{ presets.keys()|list|first }}';
+
+// ── DASHBOARD ──────────────────────────────────────────────────────────────────
+async function loadDash() {
+  const r = await api(`/api/mod/dashboard?token=${MOD_TOKEN}`, null, 'GET');
+  // Stats
+  document.getElementById('stSessions').textContent = r.stats.sessions;
+  document.getElementById('stTeams').textContent    = r.stats.teams;
+  document.getElementById('stInjects').textContent  = r.stats.injects;
+  document.getElementById('stResp').textContent     = r.stats.responses;
+  // Teams grid
+  const grid = document.getElementById('teamsGrid');
+  if (!r.teams.length) {
+    grid.innerHTML = '<div class="card text-dim text-sm">Nema prijavljenih učesnika. Čekanje na timove…</div>';
+    return;
+  }
+  grid.innerHTML = r.teams.map(t => {
+    const phasePct = Math.round((t.phases_done.filter(Boolean).length / {{ phases|length }}) * 100);
+    const memberHtml = t.members.map(m =>
+      `<div class="ltc-member ${m.submitted?'done':''}">${m.submitted?'✅ ':'⏳ '}${escHtml(m.name)}</div>`
+    ).join('');
+    const dotsHtml = Array.from({length:{{ phases|length }}},(_,i)=>{
+      const d = t.phases_done[i] ? 'done' : (i===t.current_phase?'active':'');
+      return `<div class="phase-dot ${d}" title="F${i+1}"></div>`;
+    }).join('');
+    const statusBadge = t.consensus_done
+      ? '<span class="badge badge-green">✅ Konsenzus</span>'
+      : t.ind_count > 0
+        ? `<span class="badge badge-amber">🤝 ${t.ind_count}/${t.members.length} predali</span>`
+        : '<span class="badge badge-muted">✍️ Individualni</span>';
+    const unlockBtn = t.can_unlock
+      ? `<button class="btn btn-secondary btn-sm" onclick="unlockTeam('${escHtml(t.team)}',this)">🔓 Otključaj F${t.current_phase+2}</button>`
+      : '';
+    return `<div class="live-team-card">
+      <div class="ltc-header">
+        <div class="ltc-icon">${t.icon}</div>
+        <div style="flex:1;min-width:0;">
+          <div class="ltc-name overflow-anywhere">${escHtml(t.team)}</div>
+          <div class="text-xs text-dim">F${t.current_phase+1} · ${statusBadge}</div>
+        </div>
+        <div class="ltc-score">${t.team_score}<span style="font-size:11px;color:var(--text-muted);"> pt</span></div>
+      </div>
+      <div class="ltc-dots">${dotsHtml}</div>
+      <div class="progress mt-8"><div class="progress-bar" style="width:${phasePct}%;background:var(--blue);"></div></div>
+      <div class="ltc-members mt-8">${memberHtml}</div>
+      <div class="ltc-actions">${unlockBtn}</div>
+    </div>`;
+  }).join('');
+}
+
+async function unlockTeam(team, btn) {
+  setLoading(btn, true);
+  const r = await api('/api/mod/unlock', {token: MOD_TOKEN, team});
+  if (r.ok) { toast(`✅ Faza ${r.unlocked+1} otključana za ${team}`,'success'); loadDash(); }
+  else { toast(r.error,'error'); setLoading(btn,false); }
+}
+
+async function unlockAll() {
+  const phase = parseInt(document.getElementById('unlockAllPhase').value);
+  const r = await api('/api/mod/unlock_all', {token: MOD_TOKEN, phase});
+  const st = document.getElementById('unlockAllStatus');
+  if (r.ok) { st.innerHTML=`<div class="alert alert-success">✅ Svi timovi otključani na Fazu ${phase+1}.</div>`; loadDash(); }
+  else { st.innerHTML=`<div class="alert alert-error">${r.error}</div>`; }
+}
+
+// ── INJECTS ────────────────────────────────────────────────────────────────────
+function loadPreset(sender, btn) {
+  currentPresetSender = sender;
+  document.querySelectorAll('.preset-pill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('injSender').value = sender;
+  const msgs = PRESETS_DATA[sender] || [];
+  document.getElementById('presetMsgList').innerHTML = msgs.map(m=>`
+    <div class="card-inset" style="cursor:pointer;font-size:13px;color:var(--text-2);" onclick="document.getElementById('injMsg').value=this.textContent.trim();">${m}</div>
+  `).join('');
+}
+
+async function sendInject() {
+  const msg      = document.getElementById('injMsg').value.trim();
+  const sender   = document.getElementById('injSender').value.trim() || 'Moderator';
+  const target   = document.getElementById('injTarget').value;
+  const deadline = parseInt(document.getElementById('injDeadline').value)||5;
+  const st = document.getElementById('injStatus');
+  if (!msg) { st.innerHTML='<div class="alert alert-error">Unesite poruku.</div>'; return; }
+  const r = await api('/api/mod/inject', {token:MOD_TOKEN, msg, sender, target, deadline});
+  st.innerHTML = r.ok
+    ? `<div class="alert alert-success">✅ Poslato · ID: <code style="font-family:var(--mono);">${r.id}</code></div>`
+    : `<div class="alert alert-error">${r.error}</div>`;
+  if(r.ok) document.getElementById('injMsg').value='';
+  loadRespLog();
+}
+
+async function loadRespLog() {
+  const r = await api(`/api/mod/responses?token=${MOD_TOKEN}`, null, 'GET');
+  const el = document.getElementById('injLog');
+  if (!r.length) { el.innerHTML='<div class="text-dim text-sm">Nema odgovora.</div>'; return; }
+  el.innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th>Vreme</th><th>Tim</th><th>Ime</th><th>ID poruke</th><th>Odgovor</th></tr></thead>
+    <tbody>${r.slice().reverse().map(x=>`<tr>
+      <td class="inject-log-table">${x.time}</td>
+      <td>${escHtml(x.team)}</td>
+      <td>${escHtml(x.name)}</td>
+      <td><code>${x.inject_id}</code></td>
+      <td>${escHtml(x.text)}</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+// ── BREAKING ───────────────────────────────────────────────────────────────────
+async function sendBreaking() {
+  const text    = document.getElementById('brText').value.trim();
+  const channel = document.getElementById('brChannel').value;
+  const target  = document.getElementById('brTarget').value;
+  const st = document.getElementById('brStatus');
+  if (!text) { st.innerHTML='<div class="alert alert-error">Unesite tekst.</div>'; return; }
+  const r = await api('/api/mod/breaking', {token:MOD_TOKEN, text, channel, target});
+  st.innerHTML = r.ok
+    ? `<div class="alert alert-success">🚨 Breaking news poslat · ID: <code style="font-family:var(--mono);">${r.id}</code></div>`
+    : `<div class="alert alert-error">${r.error}</div>`;
+  if(r.ok) document.getElementById('brText').value='';
+}
+
+// ── SCOREBOARD ─────────────────────────────────────────────────────────────────
+async function loadScore() {
+  const r = await api(`/api/mod/scoreboard?token=${MOD_TOKEN}`, null, 'GET');
+  const el = document.getElementById('scoreList');
+  if (!r.length) { el.innerHTML='<div class="text-dim text-sm">Nema podataka.</div>'; return; }
+  const medals = ['gold','silver','bronze'];
+  el.innerHTML = r.map((t,i)=>{
+    const acc = t.total_q ? Math.round(t.correct/t.total_q*100) : 0;
+    return `<div class="score-row">
+      <div class="score-rank ${medals[i]||''}">${i+1}.</div>
+      <div class="score-team-icon">${t.icon}</div>
+      <div style="flex:1;min-width:0;">
+        <div class="score-team-name">${escHtml(t.team)}</div>
+        <div class="text-xs text-dim">${t.members} članova · Tačnost: ${acc}% (${t.correct}/${t.total_q})</div>
+      </div>
+      <div class="score-pts">${t.score}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── EVENTS ─────────────────────────────────────────────────────────────────────
+async function loadEvents() {
+  const r = await api(`/api/mod/events?token=${MOD_TOKEN}`, null, 'GET');
+  const el = document.getElementById('eventsList');
+  if (!r.length) { el.innerHTML='<div class="text-dim text-sm">Nema događaja.</div>'; return; }
+  el.innerHTML = r.slice().reverse().map(e=>`
+    <div class="ev">
+      <span class="ev-time">${e.time}</span>
+      <span class="ev-kind">${e.kind}</span>
+      <span class="ev-team">${escHtml(e.team)}</span>
+      <span class="ev-det overflow-anywhere">${escHtml(e.details)}</span>
+    </div>`).join('');
+}
+
+// ── RESET ──────────────────────────────────────────────────────────────────────
+async function doReset() {
+  const confirm = document.getElementById('resetConfirm').value.trim();
+  const st = document.getElementById('resetStatus');
+  const r = await api('/api/mod/reset', {token:MOD_TOKEN, confirm});
+  st.innerHTML = r.ok
+    ? '<div class="alert alert-success">✅ Vežba resetovana.</div>'
+    : `<div class="alert alert-error">${r.error}</div>`;
+}
+
+// ── UTILS ──────────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+loadDash();
+setInterval(loadDash, 8000);
+loadPreset('{{ presets.keys()|list|first }}', document.querySelector('.preset-pill'));
+</script>
+{% endblock %}
