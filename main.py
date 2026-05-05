@@ -1213,6 +1213,15 @@ def get_session(token: str):
 
 
 
+def expected_answer_count(team: str, phase_idx: int) -> int:
+    try:
+        qdata = PHASES[phase_idx].get("questions", {})
+        count = 1 if qdata.get("shared") else 0
+        count += min(3, len(qdata.get(team, [])))
+        return count or 4
+    except Exception:
+        return 4
+
 def build_consensus_result(team: str, phase_idx: int, answers: list):
     """Evaluate a team consensus once and return serializable result data."""
     if phase_idx < 0 or phase_idx >= len(PHASES):
@@ -1437,9 +1446,10 @@ async def api_submit_individual(body: dict):
     if not s:
         return JSONResponse({"ok": False, "error": "Sesija nije aktivna."})
     answers = body.get("answers", [])
-    if len(answers) != 4 or any(not a for a in answers):
-        return JSONResponse({"ok": False, "error": "Odgovorite na sva četiri pitanja."})
     phase_idx = s.get("phase", 0)
+    expected_q = expected_answer_count(s["team"], phase_idx)
+    if len(answers) != expected_q or any(not a for a in answers):
+        return JSONResponse({"ok": False, "error": f"Odgovorite na sva pitanja ({expected_q})."})
     key = tp_key(s["team"], phase_idx)
     with STATE_LOCK:
         tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active", "participants": []})
@@ -1472,9 +1482,10 @@ async def api_submit_consensus(body: dict):
         return JSONResponse({"ok": False, "error": "Šef tima nije odabran. Moderator ili tim treba da odrede šefa tima."})
 
     answers = body.get("answers", [])
-    if len(answers) != 4 or any(not a for a in answers):
-        return JSONResponse({"ok": False, "error": "Odgovorite na sva četiri pitanja."})
     phase_idx = s.get("phase", 0)
+    expected_q = expected_answer_count(s["team"], phase_idx)
+    if len(answers) != expected_q or any(not a for a in answers):
+        return JSONResponse({"ok": False, "error": f"Odgovorite na sva pitanja ({expected_q})."})
     key = tp_key(s["team"], phase_idx)
 
     with STATE_LOCK:
@@ -2056,21 +2067,28 @@ async def api_export_json(token: str):
     }
     return JSONResponse(payload)
 
+def observer_key_ok(key: str) -> bool:
+    """Allow observer links generated from an active moderator token, or the legacy mod password/hash key."""
+    raw = (key or "").strip()
+    k = raw.upper()
+    if not k:
+        return False
+    meta = get_token_meta(k)
+    if meta and meta.get("mode") == "moderator":
+        return True
+    return bool(_MOD_HASH and (hashlib.sha256(raw.encode()).hexdigest() == _MOD_HASH or raw == _MOD_HASH))
+
 # ─── OBSERVER MODE ────────────────────────────────────────────────────────────
 
 @app.get("/observe", response_class=HTMLResponse)
 async def observe(request: Request, key: str = ""):
-    # Observer key = sha256 of mod password — read-only dashboard
-    if not (_MOD_HASH and hashlib.sha256(key.encode()).hexdigest() == _MOD_HASH):
-        # Try direct hash match
-        if key.strip() != _MOD_HASH:
-            return HTMLResponse("<h2>Nevalidan observer ključ.</h2>", status_code=403)
+    if not observer_key_ok(key):
+        return HTMLResponse("<h2>Nevalidan observer ključ.</h2>", status_code=403)
     return templates.TemplateResponse("observe.html", {"request": request, "key": key})
 
 @app.get("/api/observe/dashboard")
 async def api_observe_dashboard(key: str):
-    if not (_MOD_HASH and (hashlib.sha256(key.encode()).hexdigest() == _MOD_HASH
-                           or key.strip() == _MOD_HASH)):
+    if not observer_key_ok(key):
         raise HTTPException(403)
     # Same as mod dashboard but read-only
     groups = {}
