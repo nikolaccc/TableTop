@@ -44,7 +44,7 @@
   --radius:  10px;
   --radius-lg: 16px;
   --tap:     48px;
-  --page-x:  clamp(16px, 5vw, 48px);
+  --page-x:  clamp(16px, 3vw, 32px);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -113,8 +113,8 @@ body::before {
 
 /* ── PAGE SHELL ── */
 .page { padding: 0 var(--page-x) 64px; position: relative; z-index: 1; }
-.page-narrow { max-width: 680px; margin: 0 auto; }
-.page-wide   { max-width: 1200px; margin: 0 auto; }
+.page-narrow { max-width: 860px; margin: 0 auto; }
+.page-wide   { max-width: 1600px; margin: 0 auto; }
 
 /* ── SECTION SPACING ── */
 .section { padding: 48px 0 0; }
