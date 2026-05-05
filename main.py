@@ -1463,11 +1463,22 @@ async def api_submit_individual(body: dict):
         tp["individual"][token] = answers
     log_event("INDIVIDUAL_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1}")
     db_save()
-    # Count team members
+    # Count active phase participants and return leader info so the frontend
+    # can transition immediately in single-leader/single-member teams.
     with STATE_LOCK:
         participants = list(tp.get("participants", []))
         submitted = [t for t in tp.get("individual", {}).keys() if t in participants]
-    return JSONResponse({"ok": True, "submitted": len(submitted), "total": len(participants), "consensus_done": False})
+        leader = get_team_leader(s["team"])
+    return JSONResponse({
+        "ok": True,
+        "submitted": len(submitted),
+        "total": len(participants),
+        "ready_for_consensus": len(participants) > 0 and len(submitted) >= len(participants),
+        "is_leader": is_team_leader(s["team"], token),
+        "leader_name": leader.get("name", "") if leader else "",
+        "has_leader": bool(leader),
+        "consensus_done": False
+    })
 
 @app.post("/api/submit_consensus")
 async def api_submit_consensus(body: dict):
