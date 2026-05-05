@@ -1542,6 +1542,304 @@ async def api_mod_scoreboard(token: str):
     result = sorted(teams.values(), key=lambda x: -x["score"])
     return JSONResponse(result)
 
+
+# ─── SCENARIO EDITOR ──────────────────────────────────────────────────────────
+
+@app.get("/api/mod/scenario")
+async def api_get_scenario(token: str):
+    require_mod(token)
+    return JSONResponse({"ok": True, "phases": PHASES, "teams": TEAMS, "role_cards": ROLE_CARDS})
+
+def _validate_scenario(phases):
+    """Basic structural validation of a scenario payload."""
+    if not isinstance(phases, list) or len(phases) == 0:
+        return False, "Scenario mora biti lista sa bar jednom fazom."
+    for i, p in enumerate(phases):
+        for f in ("title", "clock", "narrative", "visual", "inject", "questions"):
+            if f not in p:
+                return False, f"Faza {i+1} nema polje '{f}'."
+        qs = p["questions"]
+        if "shared" not in qs:
+            return False, f"Faza {i+1}: nedostaje 'shared' pitanje."
+        if not isinstance(qs["shared"], list) or len(qs["shared"]) != 4:
+            return False, f"Faza {i+1}: 'shared' mora biti [pitanje, opcije, indeks, objasnjenje]."
+        for team in TEAMS:
+            if team not in qs:
+                return False, f"Faza {i+1}: nedostaju pitanja za tim '{team}'."
+            if not isinstance(qs[team], list) or len(qs[team]) != 3:
+                return False, f"Faza {i+1}, {team}: moraju biti tačno 3 pitanja."
+    return True, ""
+
+@app.post("/api/mod/scenario")
+async def api_update_scenario(body: dict):
+    global PHASES
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    phases = body.get("phases")
+    reset_sessions = bool(body.get("reset_sessions", False))
+    if not phases:
+        return JSONResponse({"ok": False, "error": "Nedostaje 'phases' polje."})
+    ok, err = _validate_scenario(phases)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err})
+    # Check if mid-exercise and not resetting
+    if not reset_sessions and STATE["sessions"]:
+        max_phase = max((s.get("phase", 0) for s in STATE["sessions"].values()), default=0)
+        if max_phase >= len(phases):
+            return JSONResponse({"ok": False,
+                "error": f"Tim je na fazi {max_phase+1} a novi scenario ima samo {len(phases)} faza. Resetuj sesije ili dodaj faze."})
+    with STATE_LOCK:
+        PHASES.clear()
+        PHASES.extend(phases)
+        if reset_sessions:
+            for k in ["sessions", "tokens", "events", "injects", "responses",
+                      "media_feed", "team_phases", "phase_locks"]:
+                STATE[k].clear() if isinstance(STATE[k], (dict, list)) else None
+            STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator"}
+    log_event("SCENARIO_UPDATE", token, "", "Moderator",
+              f"{len(phases)} faza, reset={reset_sessions}")
+    threading.Thread(target=db_save, daemon=True).start()
+    return JSONResponse({"ok": True, "phases": len(phases), "reset": reset_sessions})
+
+# ─── DEBRIEFING TIMELINE ──────────────────────────────────────────────────────
+
+@app.get("/api/mod/debrief")
+async def api_debrief(token: str):
+    require_mod(token)
+    # Build chronological timeline from events
+    events = [e for e in STATE["events"] if e.get("kind") in (
+        "STUDENT_LOGIN", "MOD_LOGIN", "REJOIN", "START_PHASE",
+        "INDIVIDUAL_SUBMIT", "CONSENSUS_SUBMIT", "NEXT_PHASE",
+        "MOD_INJECT", "MOD_BREAKING", "MOD_UNLOCK", "MOD_UNLOCK_ALL",
+        "SCENARIO_UPDATE",
+    )]
+    # Per-team phase summary
+    team_summary = []
+    for team in TEAMS:
+        members = [s for s in STATE["sessions"].values() if s["team"] == team]
+        if not members:
+            continue
+        phases_done = []
+        total_score = sum(s["score"] for s in members)
+        total_q = sum(len(s["decisions"]) for s in members)
+        total_ok = sum(sum(1 for d in s["decisions"].values() if d.get("ok")) for s in members)
+        for i in range(len(PHASES)):
+            tp = STATE["team_phases"].get(tp_key(team, i), {})
+            if tp.get("status") == "done":
+                consensus = tp.get("consensus", [])
+                phases_done.append({
+                    "phase": i,
+                    "title": PHASES[i]["title"],
+                    "consensus": consensus,
+                })
+        team_summary.append({
+            "team": team,
+            "icon": ROLE_CARDS[team]["icon"],
+            "members": [{"name": s["name"], "score": s["score"]} for s in members],
+            "total_score": total_score,
+            "phases_done": phases_done,
+            "accuracy": round(total_ok / total_q * 100) if total_q else 0,
+            "total_ok": total_ok,
+            "total_q": total_q,
+        })
+    team_summary.sort(key=lambda x: -x["total_score"])
+    return JSONResponse({"ok": True, "events": events, "team_summary": team_summary,
+                         "total_phases": len(PHASES)})
+
+# ─── PDF EXPORT ───────────────────────────────────────────────────────────────
+
+@app.get("/api/mod/export_pdf")
+async def api_export_pdf(token: str):
+    require_mod(token)
+    if not PDF_OK:
+        return JSONResponse({"ok": False, "error": "fpdf2 nije instaliran na serveru."})
+    path = _generate_pdf()
+    return FileResponse(path, media_type="application/pdf",
+                        filename=f"blackgrid_aar_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf")
+
+def _ascii(s):
+    repl = {"č":"c","ć":"c","š":"s","ž":"z","đ":"dj","Č":"C","Ć":"C","Š":"S","Ž":"Z","Đ":"Dj",
+            "á":"a","é":"e","í":"i","ó":"o","ú":"u","ñ":"n","ü":"u","ö":"o","ä":"a"}
+    for k, v in repl.items():
+        s = s.replace(k, v)
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+def _generate_pdf():
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
+    def hdr(txt, color=(30, 30, 80)):
+        pdf.ln(4)
+        pdf.set_fill_color(*color)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, _ascii(f"  {txt}"), ln=True, fill=True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
+
+    def sub(txt):
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(60, 60, 60)
+        pdf.cell(0, 6, _ascii(txt), ln=True)
+        pdf.set_text_color(0, 0, 0)
+
+    def txt(t, size=9):
+        pdf.set_font("Helvetica", "", size)
+        pdf.multi_cell(0, 5, _ascii(t))
+
+    def kv(k, v):
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(55, 5, _ascii(k))
+        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(0, 5, _ascii(str(v)), ln=True)
+
+    # Cover
+    pdf.add_page()
+    pdf.set_fill_color(10, 20, 50)
+    pdf.rect(0, 0, 210, 297, "F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.ln(60)
+    pdf.set_font("Helvetica", "B", 30)
+    pdf.cell(0, 12, "OPERATION", ln=True, align="C")
+    pdf.set_text_color(220, 38, 38)
+    pdf.cell(0, 12, "BLACK GRID", ln=True, align="C")
+    pdf.ln(6)
+    pdf.set_text_color(180, 190, 210)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, "After-Action Report", ln=True, align="C")
+    pdf.cell(0, 6, _ascii(f"Generisano: {datetime.now().strftime('%d.%m.%Y %H:%M')}"), ln=True, align="C")
+
+    # Summary
+    pdf.add_page()
+    pdf.set_text_color(0, 0, 0)
+    hdr("1. SUMARNI PREGLED")
+    n_sessions = len(STATE["sessions"])
+    n_teams = len(set(s["team"] for s in STATE["sessions"].values()))
+    kv("Ukupno ucesnika:", n_sessions)
+    kv("Aktivnih timova:", n_teams)
+    kv("Broj faza u scenariju:", len(PHASES))
+    kv("Poslatih injecta:", len(STATE["injects"]))
+    kv("Odgovora na injecte:", len(STATE["responses"]))
+    total_sc = sum(s["score"] for s in STATE["sessions"].values())
+    kv("Ukupan skor (svi ucesnici):", total_sc)
+
+    # Team scores
+    pdf.ln(4)
+    hdr("2. SKOROVI PO TIMOVIMA")
+    teams_data = {}
+    for s in STATE["sessions"].values():
+        t = s["team"]
+        if t not in teams_data:
+            teams_data[t] = {"score": 0, "members": 0, "ok": 0, "total": 0}
+        teams_data[t]["score"] += s["score"]
+        teams_data[t]["members"] += 1
+        for d in s["decisions"].values():
+            teams_data[t]["total"] += 1
+            if d.get("ok"):
+                teams_data[t]["ok"] += 1
+    for i, (team, td) in enumerate(sorted(teams_data.items(), key=lambda x: -x[1]["score"]), 1):
+        acc = round(td["ok"] / td["total"] * 100) if td["total"] else 0
+        sub(f"{i}. {team}")
+        kv("  Skor:", td["score"])
+        kv("  Tacnost:", f"{acc}% ({td['ok']}/{td['total']})")
+        kv("  Clanova:", td["members"])
+        pdf.ln(2)
+
+    # Per-phase results
+    pdf.add_page()
+    hdr("3. REZULTATI PO FAZAMA")
+    for i, phase in enumerate(PHASES):
+        sub(f"Faza {i+1}: {phase['title']}")
+        for team in TEAMS:
+            tp = STATE["team_phases"].get(tp_key(team, i), {})
+            if tp.get("status") != "done":
+                continue
+            consensus = tp.get("consensus", [])
+            qs = phase["questions"]
+            allq = [qs["shared"]] + list(qs.get(team, []))
+            ok_count = sum(1 for qi, q in enumerate(allq)
+                          if qi < len(consensus) and consensus[qi] == q[1][q[2]])
+            txt(f"  {team}: {ok_count}/{len(allq)} tacnih — konsenzus predat")
+        pdf.ln(2)
+
+    # Events log
+    pdf.add_page()
+    hdr("4. HRONOLOGIJA DOGADJAJA")
+    for e in STATE["events"][-80:]:
+        pdf.set_font("Helvetica", "", 8)
+        line = f"[{e['time']}] {e['kind']} | {e.get('team','')} | {e.get('name','')} | {e.get('details','')}"
+        pdf.multi_cell(0, 4, _ascii(line[:120]))
+
+    path = f"/tmp/blackgrid_aar_{uuid.uuid4().hex[:8]}.pdf"
+    pdf.output(path)
+    return path
+
+# ─── JSON EXPORT ──────────────────────────────────────────────────────────────
+
+@app.get("/api/mod/export_json")
+async def api_export_json(token: str):
+    require_mod(token)
+    payload = {
+        "exported_at": datetime.now().isoformat(),
+        "scenario": {"phases": PHASES, "teams": TEAMS},
+        "sessions": {tok: {k: v for k, v in s.items()}
+                     for tok, s in STATE["sessions"].items()},
+        "team_phases": STATE["team_phases"],
+        "injects": STATE["injects"],
+        "responses": STATE["responses"],
+        "events": STATE["events"][-500:],
+    }
+    return JSONResponse(payload)
+
+# ─── OBSERVER MODE ────────────────────────────────────────────────────────────
+
+@app.get("/observe", response_class=HTMLResponse)
+async def observe(request: Request, key: str = ""):
+    # Observer key = sha256 of mod password — read-only dashboard
+    if not (_MOD_HASH and hashlib.sha256(key.encode()).hexdigest() == _MOD_HASH):
+        # Try direct hash match
+        if key.strip() != _MOD_HASH:
+            return HTMLResponse("<h2>Nevalidan observer ključ.</h2>", status_code=403)
+    return templates.TemplateResponse("observe.html", {"request": request, "key": key})
+
+@app.get("/api/observe/dashboard")
+async def api_observe_dashboard(key: str):
+    if not (_MOD_HASH and (hashlib.sha256(key.encode()).hexdigest() == _MOD_HASH
+                           or key.strip() == _MOD_HASH)):
+        raise HTTPException(403)
+    # Same as mod dashboard but read-only
+    groups = {}
+    for tok, s in STATE["sessions"].items():
+        groups.setdefault(s["team"], []).append((tok, s))
+    teams_data = []
+    for team in TEAMS:
+        members = groups.get(team, [])
+        if not members:
+            continue
+        unlocked = get_unlock(team)
+        current_phase = max((s.get("phase", 0) for _, s in members), default=0)
+        tp = STATE["team_phases"].get(tp_key(team, current_phase), {})
+        ind_count = len(tp.get("individual", {}))
+        team_score = sum(s["score"] for _, s in members)
+        phases_done = [STATE["team_phases"].get(tp_key(team, i), {}).get("status") == "done"
+                       for i in range(len(PHASES))]
+        teams_data.append({
+            "team": team, "icon": ROLE_CARDS[team]["icon"],
+            "members": [{"name": s["name"], "score": s["score"],
+                         "submitted": tok in tp.get("individual", {})} for tok, s in members],
+            "current_phase": current_phase, "unlocked": unlocked,
+            "ind_count": ind_count,
+            "consensus_done": tp.get("status") == "done",
+            "team_score": team_score, "phases_done": phases_done,
+        })
+    stats = {
+        "sessions": len(STATE["sessions"]),
+        "teams": len(groups),
+        "injects": len(STATE["injects"]),
+        "total_phases": len(PHASES),
+    }
+    return JSONResponse({"teams": teams_data, "stats": stats})
+
 # ─── WEBSOCKET ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{token}")
