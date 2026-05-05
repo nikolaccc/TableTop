@@ -678,8 +678,17 @@ ws_manager = WSManager()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 app = FastAPI(title="Operation Black Grid")
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
-templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
+
+# Resolve paths relative to this file — works both locally and in Azure /tmp/... paths
+_BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+_STATIC_DIR    = os.path.join(_BASE_DIR, "static")
+_TEMPLATES_DIR = os.path.join(_BASE_DIR, "templates")
+
+# Auto-create static dir: Azure ZIP deploy strips empty directories from the archive
+os.makedirs(_STATIC_DIR, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
 # ─── STARTUP ──────────────────────────────────────────────────────────────────
 @app.on_event("startup")
