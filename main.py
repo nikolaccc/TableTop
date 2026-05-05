@@ -1059,6 +1059,47 @@ def is_team_leader(team: str, token: str) -> bool:
     leader = get_team_leader(team)
     return bool(leader and leader.get("token") == (token or "").strip().upper())
 
+def release_session(token: str, reason: str = "LOGOUT") -> dict | None:
+    """Invalidate a participant/moderator token and clean dependent team state.
+
+    If a participant leaves before consensus, remove them from active phase participants
+    so their team is not blocked waiting for an abandoned browser session. If the
+    participant was team leader, free that team's leader slot.
+    """
+    tok = (token or "").strip().upper()
+    if not tok:
+        return None
+    removed = None
+    with STATE_LOCK:
+        removed = STATE.get("sessions", {}).pop(tok, None)
+        meta = STATE.get("tokens", {}).pop(tok, None)
+        team = (removed or meta or {}).get("team")
+
+        # Free team leader slot if this token owned it.
+        if team and STATE.get("team_leaders", {}).get(team, {}).get("token") == tok:
+            STATE["team_leaders"].pop(team, None)
+
+        # Remove abandoned participant from active/not-yet-finished phases.
+        # Do not touch completed consensus results.
+        if team:
+            for key, tp in list(STATE.get("team_phases", {}).items()):
+                if not key.startswith(f"{team}::"):
+                    continue
+                if tp.get("status") == "done":
+                    continue
+                if tok in tp.get("participants", []):
+                    tp["participants"] = [x for x in tp.get("participants", []) if x != tok]
+                if tok in tp.get("individual", {}):
+                    tp.get("individual", {}).pop(tok, None)
+
+    if removed or meta:
+        log_event(reason, tok, (removed or meta or {}).get("team", ""), (removed or meta or {}).get("name", ""), "Sesija prekinuta")
+        db_save()
+    return removed
+
+def session_is_expired(session: dict) -> bool:
+    return bool(session and time.time() - session.get("started_at", time.time()) > SESSION_TTL)
+
 def log_event(kind, token="", team="", name="", details=""):
     with STATE_LOCK:
         STATE["events"].append({
@@ -1074,12 +1115,18 @@ def trim_state():
         expired = [t for t, s in STATE["sessions"].items()
                    if now - s.get("started_at", now) > SESSION_TTL]
         for t in expired:
-            STATE["sessions"].pop(t, None)
+            # Inline cleanup to avoid nested logging from release_session while trimming.
+            ss = STATE["sessions"].pop(t, None)
             STATE["tokens"].pop(t, None)
-        # If an expired session was a team leader, free that team's leader slot.
-        for team, leader in list(STATE.get("team_leaders", {}).items()):
-            if leader.get("token") in expired:
+            team = (ss or {}).get("team")
+            if team and STATE.get("team_leaders", {}).get(team, {}).get("token") == t:
                 STATE["team_leaders"].pop(team, None)
+            if team:
+                for key, tp in list(STATE.get("team_phases", {}).items()):
+                    if key.startswith(f"{team}::") and tp.get("status") != "done":
+                        if t in tp.get("participants", []):
+                            tp["participants"] = [x for x in tp.get("participants", []) if x != t]
+                        tp.get("individual", {}).pop(t, None)
         if len(STATE["media_feed"]) > 200:
             STATE["media_feed"] = STATE["media_feed"][-200:]
 
@@ -1159,6 +1206,9 @@ def get_session(token: str):
     if not s:
         db_load()
         s = STATE["sessions"].get(tok)
+    if s and session_is_expired(s):
+        release_session(tok, "SESSION_EXPIRED")
+        return None
     return s
 
 
@@ -1340,11 +1390,22 @@ async def api_login(req: Request, body: LoginRequest):
 @app.post("/api/rejoin")
 async def api_rejoin(body: dict):
     token = str(body.get("token", "")).strip().upper()
-    s = STATE["sessions"].get(token)
+    s = get_session(token)
     if not s:
-        return JSONResponse({"ok": False, "error": "Token nije pronađen."})
+        return JSONResponse({"ok": False, "error": "Token nije pronađen ili je sesija istekla."})
     log_event("REJOIN", token, s["team"], s["name"])
     return JSONResponse({"ok": True, "token": token, "redirect": f"/play?token={token}"})
+
+@app.post("/api/logout")
+async def api_logout(body: dict):
+    token = str(body.get("token", "")).strip().upper()
+    release_session(token, "LOGOUT")
+    return JSONResponse({"ok": True, "redirect": "/"})
+
+@app.get("/logout")
+async def logout(token: str = ""):
+    release_session(token, "LOGOUT")
+    return RedirectResponse("/")
 
 # ─── PARTICIPANT APIs ──────────────────────────────────────────────────────────
 
@@ -1472,7 +1533,7 @@ async def api_phase_state(token: str):
     token = token.strip().upper()
     s = get_session(token)
     if not s:
-        return JSONResponse({"ok": False})
+        return JSONResponse({"ok": False, "session_expired": True, "error": "Sesija nije aktivna ili je istekla."})
     phase_idx = s.get("phase", 0)
     unlocked = get_unlock(s["team"])
     key = tp_key(s["team"], phase_idx)
@@ -1492,6 +1553,9 @@ async def api_phase_state(token: str):
         "submitted_count": len(submitted),
         "total_members": len(participants),
         "elapsed": elapsed,
+        "active_started": bool(s.get("phase_started_at")),
+        "my_submitted": token in tp.get("individual", {}),
+        "my_answers": tp.get("individual", {}).get(token, []),
         "score": s["score"],
         "next_available": unlocked > phase_idx and status == "done",
         "session_expired": False,
