@@ -52,6 +52,7 @@
     <span style="color:var(--text-3);font-size:11px;">TOKEN</span>
     <span class="tb-tok">{{ token }}</span>
     <span class="tb-team" id="teamLabel">{{ session.team }}</span>
+    {% if is_leader %}<span class="badge badge-red mono">ŠEF TIMA</span>{% elif leader_name %}<span class="badge badge-muted mono">Šef: {{ leader_name }}</span>{% else %}<span class="badge badge-amber mono">Šef nije odabran</span>{% endif %}
     <span class="tb-score" id="scoreLabel">🏆 <span id="scoreVal">{{ session.score }}</span></span>
   </div>
 
@@ -186,7 +187,7 @@
     </div>
     <!-- Consensus dropdowns Q1-Q4 -->
     <div class="card">
-      <div class="kicker mb-16" style="color:var(--blue-light);">Glasajte za timski odgovor</div>
+      <div class="kicker mb-16" style="color:var(--blue-light);" id="consensusTitle">Timski odgovor</div>
       <div class="form-stack" id="consensusForm"></div>
       <button class="btn btn-primary btn-full mt-16" id="consensusBtn" onclick="submitConsensus()">
         Predaj timski konsenzus
@@ -255,6 +256,8 @@
 {% block scripts %}
 <script>
 const TOKEN    = '{{ token }}';
+const IS_LEADER = {{ 'true' if is_leader else 'false' }};
+const INITIAL_LEADER_NAME = {{ leader_name|tojson }};
 const PHASE_COUNT = {{ phase_count }};
 let currentPhase = {{ phase_idx }};
 let selected = [null, null, null, null];
@@ -395,6 +398,12 @@ async function submitAnswers() {
   setLoading(btn, true);
   const r = await api('/api/submit_individual', {token: TOKEN, answers: selected});
   if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); return; }
+  if (r.consensus_done) {
+    stopTimer();
+    toast(r.message || 'Timski konsenzus je već predat. Prikazujem rezultat.','info');
+    showResults(r);
+    return;
+  }
   toast('Individualni odgovor predat!','success');
   show('waitSection');
   document.getElementById('waitText').textContent =
@@ -433,13 +442,24 @@ async function doPoll() {
     }
 
     const currentView = getCurrentView();
+
+    // If any member already submitted team consensus, all other members must
+    // move to the same read-only result. This prevents duplicate consensus UX.
+    if (r.consensus_done && currentView !== 'resultSection' && currentView !== 'doneSection') {
+      stopTimer();
+      if (r.submitted_by) toast(`Timski konsenzus je već predat (${r.submitted_by}).`, 'info');
+      showResults(r);
+      return;
+    }
+
     if (currentView === 'waitSection') {
       buildTeamStatus(r.submitted_count, r.total_members);
       document.getElementById('waitText').textContent =
         `${r.submitted_count} / ${r.total_members} članova predalo odgovor`;
       if (r.submitted_count >= r.total_members && r.total_members > 0) {
-        // All submitted — show consensus
-        showConsensus();
+        // All submitted — only the team leader can submit consensus.
+        if (r.is_leader) showConsensus();
+        else showLeaderWait(r.leader_name, r.has_leader);
       }
     } else if (currentView === 'resultSection') {
       if (r.next_available) {
@@ -456,7 +476,20 @@ function getCurrentView() {
 }
 
 // ── CONSENSUS ─────────────────────────────────────────────────────────────────
+function showLeaderWait(leaderName, hasLeader=true) {
+  show('waitSection');
+  document.querySelector('#waitSection .waiting-title').textContent = hasLeader ? 'Čekanje na šefa tima' : 'Šef tima nije odabran';
+  document.getElementById('waitText').textContent = hasLeader
+    ? `Svi aktivni članovi su predali individualne odgovore. Timski konsenzus sada predaje šef tima: ${leaderName || '—'}.`
+    : 'Svi aktivni članovi su predali odgovore, ali tim nema odabranog šefa. Obratite se moderatoru.';
+  document.getElementById('teamStatusWrap').innerHTML = `<div class="alert alert-info">${hasLeader ? 'Ne morate ništa dodatno da radite. Rezultat će se pojaviti automatski kada šef tima preda konsenzus.' : 'Moderator može resetovati/odrediti šefa tima novim login-om.'}</div>`;
+}
+
 function showConsensus() {
+  if (!IS_LEADER) {
+    showLeaderWait(INITIAL_LEADER_NAME, !!INITIAL_LEADER_NAME);
+    return;
+  }
   clearInterval(pollInterval);
   const p = PHASES_JSON[currentPhase];
   const team = '{{ session.team }}';
@@ -471,6 +504,9 @@ function showConsensus() {
         <div class="text-xs text-dim mb-4">Pitanje ${i+1}: ${allQ[i][0]}</div>
         <div style="font-size:14px;color:#fff;font-weight:600;">${ans || '—'}</div>
       </div>`).join('');
+
+  document.getElementById('consensusTitle').textContent = 'Šef tima — predaja konačnog timskog konsenzusa';
+  document.getElementById('consensusBtn').style.display = 'flex';
 
   // Build consensus dropdowns
   const form = document.getElementById('consensusForm');
@@ -491,9 +527,11 @@ async function submitConsensus() {
   if (answers.some(a=>!a)) { toast('Odaberite timski odgovor za sva pitanja.','error'); return; }
   const btn = document.getElementById('consensusBtn');
   setLoading(btn, true);
+  btn.disabled = true;
   const r = await api('/api/submit_consensus', {token: TOKEN, answers});
-  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); return; }
+  if (!r.ok) { toast(r.error,'error'); setLoading(btn,false); btn.disabled=false; return; }
   stopTimer();
+  if (r.already_done) toast(r.message || 'Timski konsenzus je već predat.','info');
   showResults(r);
 }
 
@@ -623,6 +661,10 @@ async function loadMedia() {
 (function init() {
   loadInjects();
   loadMedia();
+  // Initial state check is important after refresh: if the team already
+  // submitted consensus or moderator unlocked next phase, the UI catches up.
+  doPoll();
+  if (!pollInterval) pollInterval = setInterval(doPoll, 3000);
   setInterval(loadInjects, 15000);
   setInterval(loadMedia, 10000);
 })();

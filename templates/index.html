@@ -37,6 +37,13 @@
 .mode-btn.active { background: var(--red); color: #fff; }
 .code-hint { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-top: 4px; }
 .rejoin-block { margin-top: 28px; }
+.leader-check {
+  display:flex; gap:10px; align-items:flex-start;
+  padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius);
+  background:rgba(255,255,255,.035); cursor:pointer;
+}
+.leader-check input { width:18px; height:18px; margin-top:2px; accent-color:var(--red); }
+.leader-check.disabled { opacity:.55; cursor:not-allowed; }
 </style>
 {% endblock %}
 
@@ -68,12 +75,22 @@
 
         <div class="input-group" id="teamGroup">
           <label class="input-label" for="loginTeam">Tim</label>
-          <select class="input" id="loginTeam">
+          <select class="input" id="loginTeam" onchange="checkLeaderStatus()">
             <option value="">Izaberite tim…</option>
             {% for team in teams %}
             <option value="{{ team }}">{{ team }}</option>
             {% endfor %}
           </select>
+        </div>
+
+        <div class="input-group" id="leaderGroup">
+          <label class="leader-check" id="leaderCheckWrap" for="loginLeader">
+            <input id="loginLeader" type="checkbox">
+            <span>
+              <strong>Ja sam šef tima</strong><br>
+              <span class="code-hint" id="leaderHint">Samo šef tima predaje konačni timski konsenzus.</span>
+            </span>
+          </label>
         </div>
 
         <div class="input-group" id="codeGroup">
@@ -126,9 +143,32 @@ function setMode(mode, btn) {
   const isMod = mode === 'moderator';
   document.getElementById('nameGroup').classList.toggle('hidden', isMod);
   document.getElementById('teamGroup').classList.toggle('hidden', isMod);
+  document.getElementById('leaderGroup').classList.toggle('hidden', isMod);
   document.getElementById('codeGroup').classList.toggle('hidden', isMod);
   document.getElementById('pwGroup').classList.toggle('hidden', !isMod);
   document.getElementById('loginError').classList.add('hidden');
+}
+
+
+async function checkLeaderStatus() {
+  const team = document.getElementById('loginTeam').value;
+  const cb = document.getElementById('loginLeader');
+  const wrap = document.getElementById('leaderCheckWrap');
+  const hint = document.getElementById('leaderHint');
+  cb.checked = false;
+  cb.disabled = false;
+  wrap.classList.remove('disabled');
+  hint.textContent = 'Samo šef tima predaje konačni timski konsenzus.';
+  if (!team || currentMode === 'moderator') return;
+  try {
+    const r = await api(`/api/team_leader_status?team=${encodeURIComponent(team)}`, null, 'GET');
+    if (r.ok && r.has_leader) {
+      cb.disabled = true;
+      cb.checked = false;
+      wrap.classList.add('disabled');
+      hint.textContent = `Šef tima je već odabran: ${r.leader_name}.`;
+    }
+  } catch(e) {}
 }
 
 async function doLogin() {
@@ -143,6 +183,7 @@ async function doLogin() {
     mode: currentMode,
     exercise_code: document.getElementById('loginCode').value,
     password: document.getElementById('loginPw').value,
+    is_leader: document.getElementById('loginLeader')?.checked || false,
   };
 
   try {

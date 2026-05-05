@@ -275,7 +275,7 @@ async function loadDash() {
   grid.innerHTML = r.teams.map(t => {
     const phasePct = Math.round(t.phases_done.filter(Boolean).length / PHASE_COUNT * 100);
     const memberHtml = t.members.map(m =>
-      `<div class="ltc-member ${m.submitted?'done':''}">${m.submitted?'✅ ':'⏳ '}${esc(m.name)}<span style="color:var(--amber);margin-left:4px;">${m.score}pt</span></div>`
+      `<div class="ltc-member ${m.submitted?'done':''}">${m.submitted?'✅ ':'⏳ '}${m.is_leader?'👑 ':''}${esc(m.name)}<span style="color:var(--amber);margin-left:4px;">${m.score}pt</span></div>`
     ).join('');
     const dotsHtml = Array.from({length:PHASE_COUNT},(_,i)=>{
       const c=t.phases_done[i]?'done':(i===t.current_phase?'active':'');
@@ -290,15 +290,25 @@ async function loadDash() {
       <div class="ltc-header">
         <div class="ltc-icon">${t.icon}</div>
         <div style="flex:1;min-width:0;"><div class="ltc-name overflow-anywhere">${esc(t.team)}</div>
-          <div class="text-xs" style="margin-top:3px;">F${t.current_phase+1} · ${sb}</div></div>
+          <div class="text-xs" style="margin-top:3px;">F${t.current_phase+1} · ${sb}</div>
+          <div class="text-xs text-dim" style="margin-top:3px;">👑 Šef: ${t.leader ? esc(t.leader.name) : 'nije odabran'}</div></div>
         <div class="ltc-score">${t.team_score}<span style="font-size:11px;color:var(--text-muted);"> pt</span></div>
       </div>
       <div class="ltc-dots">${dotsHtml}</div>
       <div class="progress mt-8"><div class="progress-bar" style="width:${phasePct}%;background:var(--blue);"></div></div>
       <div class="ltc-members mt-8">${memberHtml}</div>
-      <div class="ltc-actions">${ub}</div>
+      <div class="ltc-actions">${ub}${t.leader ? `<button class="btn btn-ghost btn-sm" onclick="resetLeader('${esc(t.team)}',this)">↺ Reset šefa</button>` : ''}</div>
     </div>`;
   }).join('');
+}
+
+
+async function resetLeader(team, btn) {
+  if(!confirm(`Resetovati šefa tima za: ${team}?`)) return;
+  setLoading(btn, true);
+  const r = await api('/api/mod/reset_leader', {token:MOD_TOKEN, team});
+  r.ok ? (toast(`Šef tima resetovan za ${team}`,'success'), loadDash())
+       : (toast(r.error || 'Greška','error'), setLoading(btn,false));
 }
 
 async function unlockTeam(team, btn) {
