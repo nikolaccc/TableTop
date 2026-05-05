@@ -1030,6 +1030,7 @@ STATE = {
     "media_feed":    [],   # live media items
     "team_phases":   {},   # "team::phase" -> {individual, consensus, status}
     "phase_locks":   {},   # team -> max unlocked phase index
+    "team_leaders":  {},   # team -> {token, name, selected_at}
 }
 
 SESSION_TTL = 6 * 3600
@@ -1045,6 +1046,18 @@ def tp_key(team, phase_idx):
 
 def get_unlock(team):
     return STATE["phase_locks"].get(team, 0)
+
+def get_team_leader(team: str):
+    leader = STATE.get("team_leaders", {}).get(team)
+    if leader and leader.get("token") in STATE.get("sessions", {}):
+        return leader
+    if leader:
+        STATE.get("team_leaders", {}).pop(team, None)
+    return None
+
+def is_team_leader(team: str, token: str) -> bool:
+    leader = get_team_leader(team)
+    return bool(leader and leader.get("token") == (token or "").strip().upper())
 
 def log_event(kind, token="", team="", name="", details=""):
     with STATE_LOCK:
@@ -1063,6 +1076,10 @@ def trim_state():
         for t in expired:
             STATE["sessions"].pop(t, None)
             STATE["tokens"].pop(t, None)
+        # If an expired session was a team leader, free that team's leader slot.
+        for team, leader in list(STATE.get("team_leaders", {}).items()):
+            if leader.get("token") in expired:
+                STATE["team_leaders"].pop(team, None)
         if len(STATE["media_feed"]) > 200:
             STATE["media_feed"] = STATE["media_feed"][-200:]
 
@@ -1144,6 +1161,55 @@ def get_session(token: str):
         s = STATE["sessions"].get(tok)
     return s
 
+
+
+def build_consensus_result(team: str, phase_idx: int, answers: list):
+    """Evaluate a team consensus once and return serializable result data."""
+    if phase_idx < 0 or phase_idx >= len(PHASES):
+        return {"gained": 0, "max": 0, "results": []}
+    phase = PHASES[phase_idx]
+    qs = phase.get("questions", {})
+    shared = qs.get("shared")
+    team_qs = qs.get(team, [])
+    all_q = []
+    if shared:
+        all_q.append(shared)
+    all_q.extend(list(team_qs)[:3])
+
+    gained = 0
+    results = []
+    for i, q in enumerate(all_q):
+        opts = q[1] if len(q) > 1 else []
+        correct_idx = q[2] if len(q) > 2 else 0
+        correct = opts[correct_idx] if opts and 0 <= correct_idx < len(opts) else ""
+        selected = answers[i] if i < len(answers) else ""
+        ok = selected == correct
+        if ok:
+            gained += 10
+        results.append({
+            "question": q[0] if q else "",
+            "selected": selected,
+            "correct": correct,
+            "ok": ok,
+            "explain": q[3] if len(q) > 3 else ""
+        })
+    return {"gained": gained, "max": len(all_q) * 10, "results": results}
+
+def get_consensus_payload(team: str, phase_idx: int, tp: dict | None = None):
+    """Return the already stored consensus result for a team/phase, rebuilding it if needed."""
+    tp = tp if tp is not None else STATE["team_phases"].get(tp_key(team, phase_idx), {})
+    answers = tp.get("consensus", []) or []
+    stored = tp.get("result")
+    if stored:
+        return {
+            "gained": stored.get("gained", 0),
+            "max": stored.get("max", 0),
+            "results": stored.get("results", []),
+        }
+    if answers:
+        return build_consensus_result(team, phase_idx, answers)
+    return {"gained": 0, "max": 0, "results": []}
+
 def get_token_meta(token: str):
     tok = (token or "").strip().upper()
     meta = STATE["tokens"].get(tok)
@@ -1172,6 +1238,7 @@ async def play(request: Request, token: str = ""):
     unlocked  = get_unlock(s["team"])
     phase     = PHASES[phase_idx] if phase_idx < len(PHASES) else None
     tp        = STATE["team_phases"].get(tp_key(s["team"], phase_idx), {})
+    leader = get_team_leader(s["team"])
     return templates.TemplateResponse("play.html", {
         "request":     request,
         "token":       token.upper(),
@@ -1182,6 +1249,8 @@ async def play(request: Request, token: str = ""):
         "unlocked":    unlocked,
         "tp":          tp,
         "role":        ROLE_CARDS.get(s["team"], {}),
+        "is_leader":   is_team_leader(s["team"], token),
+        "leader_name": leader.get("name", "") if leader else "",
         "phases_json": json.dumps(PHASES, ensure_ascii=False),
     })
 
@@ -1202,11 +1271,24 @@ async def mod_panel(request: Request, token: str = ""):
 # ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    name: str
-    team: str
+    name: str = ""
+    team: str = ""
     mode: str
     exercise_code: str = ""
     password: str = ""
+    is_leader: bool = False
+
+
+@app.get("/api/team_leader_status")
+async def api_team_leader_status(team: str = ""):
+    if team not in TEAMS:
+        return JSONResponse({"ok": False, "error": "Nevalidan tim."})
+    leader = get_team_leader(team)
+    return JSONResponse({
+        "ok": True,
+        "has_leader": bool(leader),
+        "leader_name": leader.get("name", "") if leader else "",
+    })
 
 @app.post("/api/login")
 async def api_login(req: Request, body: LoginRequest):
@@ -1231,14 +1313,29 @@ async def api_login(req: Request, body: LoginRequest):
         return JSONResponse({"ok": False, "error": "Pogrešan kod vežbe."})
     token = make_token()
     with STATE_LOCK:
+        # Team leader is reserved at login. Only one active leader is allowed per team.
+        leader = get_team_leader(body.team)
+        became_leader = False
+        if body.is_leader:
+            if leader:
+                return JSONResponse({
+                    "ok": False,
+                    "error": f"Šef tima je već odabran: {leader.get('name', 'nepoznato')}."
+                })
+            STATE.setdefault("team_leaders", {})[body.team] = {
+                "token": token, "name": body.name, "selected_at": time.time()
+            }
+            became_leader = True
+
         STATE["tokens"][token] = {"mode": "student", "name": body.name, "team": body.team}
         STATE["sessions"][token] = {
             "name": body.name, "team": body.team, "phase": 0, "score": 0,
             "decisions": {}, "started_at": time.time(), "phase_started_at": None,
+            "is_leader": became_leader,
         }
-    log_event("STUDENT_LOGIN", token, body.team, body.name)
+    log_event("STUDENT_LOGIN", token, body.team, body.name, "Šef tima" if became_leader else "Član tima")
     db_save()
-    return JSONResponse({"ok": True, "token": token, "mode": "student", "redirect": f"/play?token={token}"})
+    return JSONResponse({"ok": True, "token": token, "mode": "student", "is_leader": became_leader, "redirect": f"/play?token={token}"})
 
 @app.post("/api/rejoin")
 async def api_rejoin(body: dict):
@@ -1265,7 +1362,9 @@ async def api_start_phase(body: dict):
         s["phase_started_at"] = time.time()
         key = tp_key(s["team"], phase_idx)
         if key not in STATE["team_phases"]:
-            STATE["team_phases"][key] = {"individual": {}, "consensus": [], "status": "active"}
+            STATE["team_phases"][key] = {"individual": {}, "consensus": [], "status": "active", "participants": []}
+        if token not in STATE["team_phases"][key].setdefault("participants", []):
+            STATE["team_phases"][key]["participants"].append(token)
     log_event("START_PHASE", token, s["team"], s["name"], f"F{phase_idx+1}")
     db_save()
     return JSONResponse({"ok": True})
@@ -1282,15 +1381,22 @@ async def api_submit_individual(body: dict):
     phase_idx = s.get("phase", 0)
     key = tp_key(s["team"], phase_idx)
     with STATE_LOCK:
-        tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active"})
+        tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active", "participants": []})
+        # If another team member already submitted consensus, do not allow late individual overwrite.
+        if tp.get("status") == "done":
+            payload = get_consensus_payload(s["team"], phase_idx, tp)
+            return JSONResponse({"ok": True, "consensus_done": True, "already_done": True, **payload})
+        if token not in tp.setdefault("participants", []):
+            tp["participants"].append(token)
+        # Individual answer is intentionally idempotent: same member can correct before consensus.
         tp["individual"][token] = answers
     log_event("INDIVIDUAL_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1}")
     db_save()
     # Count team members
     with STATE_LOCK:
-        members = [t for t, ss in STATE["sessions"].items() if ss["team"] == s["team"]]
-        submitted = list(tp["individual"].keys())
-    return JSONResponse({"ok": True, "submitted": len(submitted), "total": len(members)})
+        participants = list(tp.get("participants", []))
+        submitted = [t for t in tp.get("individual", {}).keys() if t in participants]
+    return JSONResponse({"ok": True, "submitted": len(submitted), "total": len(participants), "consensus_done": False})
 
 @app.post("/api/submit_consensus")
 async def api_submit_consensus(body: dict):
@@ -1298,44 +1404,68 @@ async def api_submit_consensus(body: dict):
     s = get_session(token)
     if not s:
         return JSONResponse({"ok": False, "error": "Sesija nije aktivna."})
+    if not is_team_leader(s["team"], token):
+        leader = get_team_leader(s["team"])
+        if leader:
+            return JSONResponse({"ok": False, "error": f"Timski konsenzus može da preda samo šef tima: {leader.get('name', '')}."})
+        return JSONResponse({"ok": False, "error": "Šef tima nije odabran. Moderator ili tim treba da odrede šefa tima."})
+
     answers = body.get("answers", [])
     if len(answers) != 4 or any(not a for a in answers):
         return JSONResponse({"ok": False, "error": "Odgovorite na sva četiri pitanja."})
     phase_idx = s.get("phase", 0)
     key = tp_key(s["team"], phase_idx)
-    p  = PHASES[phase_idx]
-    qs = p["questions"]
-    shared   = qs["shared"]
-    team_qs  = qs.get(s["team"], [["—", ["—"], 0, "—"]] * 3)
-    all_q    = [shared] + list(team_qs)
-
-    gained = 0
-    results = []
-    for i, q in enumerate(all_q):
-        correct = q[1][q[2]]
-        ok      = answers[i] == correct
-        if ok:
-            gained += 10
-        results.append({"question": q[0], "selected": answers[i], "correct": correct, "ok": ok, "explain": q[3]})
 
     with STATE_LOCK:
-        tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active"})
+        tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active", "participants": []})
+
+        # CRITICAL: team consensus is single-submit per team per phase.
+        # A second team member must never overwrite consensus or double-score the team.
+        if tp.get("status") == "done":
+            payload = get_consensus_payload(s["team"], phase_idx, tp)
+            return JSONResponse({
+                "ok": True,
+                "already_done": True,
+                "message": "Timski konsenzus je već predat.",
+                **payload,
+            })
+
+        if token not in tp.setdefault("participants", []):
+            tp["participants"].append(token)
+        participants = list(tp.get("participants", []))
+        submitted = set(tp.get("individual", {}).keys())
+        missing = [pt for pt in participants if pt not in submitted]
+        if missing:
+            return JSONResponse({
+                "ok": False,
+                "error": f"Timski konsenzus nije moguć dok svi aktivni članovi ne predaju individualni odgovor ({len(submitted)}/{len(participants)})."
+            })
+
+        payload = build_consensus_result(s["team"], phase_idx, answers)
+        gained = payload["gained"]
+        results = payload["results"]
+
         tp["consensus"] = answers
-        tp["status"]    = "done"
-        # Score all team members
+        tp["status"] = "done"
+        tp["result"] = payload
+        tp["submitted_by"] = token
+        tp["submitted_by_name"] = s.get("name", "")
+        tp["submitted_at"] = time.time()
+
+        # Score all current team members exactly once at consensus time.
         for t, ss in STATE["sessions"].items():
             if ss["team"] == s["team"]:
                 ss["score"] += gained
-                for i, q in enumerate(all_q):
+                for i, res in enumerate(results):
                     ss["decisions"][f"f{phase_idx+1}q{i+1}"] = {
-                        "ok": results[i]["ok"],
-                        "selected": answers[i],
-                        "correct": results[i]["correct"],
-                        "question": q[0]
+                        "ok": res["ok"],
+                        "selected": res["selected"],
+                        "correct": res["correct"],
+                        "question": res["question"],
                     }
     log_event("CONSENSUS_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1} skor:{gained}")
     db_save()
-    return JSONResponse({"ok": True, "gained": gained, "max": len(all_q) * 10, "results": results})
+    return JSONResponse({"ok": True, "already_done": False, **payload})
 
 @app.get("/api/phase_state")
 async def api_phase_state(token: str):
@@ -1344,23 +1474,33 @@ async def api_phase_state(token: str):
     if not s:
         return JSONResponse({"ok": False})
     phase_idx = s.get("phase", 0)
-    unlocked  = get_unlock(s["team"])
-    key       = tp_key(s["team"], phase_idx)
-    tp        = STATE["team_phases"].get(key, {})
-    members   = [t for t, ss in STATE["sessions"].items() if ss["team"] == s["team"]]
-    submitted = list(tp.get("individual", {}).keys())
-    elapsed   = int(time.time() - s["phase_started_at"]) if s.get("phase_started_at") else 0
+    unlocked = get_unlock(s["team"])
+    key = tp_key(s["team"], phase_idx)
+    tp = STATE["team_phases"].get(key, {})
+    members = [t for t, ss in STATE["sessions"].items() if ss["team"] == s["team"]]
+    participants = list(tp.get("participants", [])) or members
+    submitted = [t for t in tp.get("individual", {}).keys() if t in participants]
+    elapsed = int(time.time() - s["phase_started_at"]) if s.get("phase_started_at") else 0
+    status = tp.get("status", "idle")
+    consensus_payload = get_consensus_payload(s["team"], phase_idx, tp) if status == "done" else {"gained": 0, "max": 0, "results": []}
+    leader = get_team_leader(s["team"])
     return JSONResponse({
-        "ok":       True,
-        "phase":    phase_idx,
+        "ok": True,
+        "phase": phase_idx,
         "unlocked": unlocked,
-        "status":   tp.get("status", "idle"),
+        "status": status,
         "submitted_count": len(submitted),
-        "total_members":   len(members),
-        "elapsed":         elapsed,
-        "score":           s["score"],
-        "next_available":  unlocked > phase_idx and tp.get("status") == "done",
+        "total_members": len(participants),
+        "elapsed": elapsed,
+        "score": s["score"],
+        "next_available": unlocked > phase_idx and status == "done",
         "session_expired": False,
+        "consensus_done": status == "done",
+        "submitted_by": tp.get("submitted_by_name", ""),
+        "is_leader": is_team_leader(s["team"], token),
+        "leader_name": leader.get("name", "") if leader else "",
+        "has_leader": bool(leader),
+        **consensus_payload,
     })
 
 @app.post("/api/next_phase")
@@ -1379,7 +1519,7 @@ async def api_next_phase(body: dict):
         s["phase_started_at"] = None
         key = tp_key(s["team"], next_idx)
         if key not in STATE["team_phases"]:
-            STATE["team_phases"][key] = {"individual": {}, "consensus": [], "status": "active"}
+            STATE["team_phases"][key] = {"individual": {}, "consensus": [], "status": "active", "participants": []}
     log_event("NEXT_PHASE", token, s["team"], s["name"], f"F{next_idx+1}")
     db_save()
     return JSONResponse({"ok": True, "phase": next_idx})
@@ -1445,10 +1585,13 @@ async def api_mod_dashboard(token: str):
         ind_count = len(tp.get("individual", {}))
         consensus_done = tp.get("status") == "done"
         team_score = sum(s["score"] for _, s in members)
+        leader = get_team_leader(team)
         teams_data.append({
             "team": team,
             "icon": ROLE_CARDS[team]["icon"],
+            "leader": {"name": leader.get("name", ""), "token": leader.get("token", "")} if leader else None,
             "members": [{"name": s["name"], "token": tok, "score": s["score"],
+                         "is_leader": bool(leader and leader.get("token") == tok),
                          "submitted": tok in tp.get("individual", {})} for tok, s in members],
             "current_phase": current_phase,
             "unlocked": unlocked,
@@ -1466,6 +1609,22 @@ async def api_mod_dashboard(token: str):
         "responses": len(STATE["responses"]),
     }
     return JSONResponse({"teams": teams_data, "stats": stats})
+
+
+@app.post("/api/mod/reset_leader")
+async def api_mod_reset_leader(body: dict):
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    team = body.get("team", "")
+    if team not in TEAMS:
+        return JSONResponse({"ok": False, "error": "Nevalidan tim."})
+    with STATE_LOCK:
+        old = STATE.get("team_leaders", {}).pop(team, None)
+        if old and old.get("token") in STATE.get("sessions", {}):
+            STATE["sessions"][old["token"]]["is_leader"] = False
+    log_event("MOD_RESET_LEADER", token, team, "Moderator", "Resetovan šef tima")
+    db_save()
+    return JSONResponse({"ok": True})
 
 @app.post("/api/mod/unlock")
 async def api_mod_unlock(body: dict):
@@ -1560,7 +1719,7 @@ async def api_mod_reset(body: dict):
     if confirm != "RESET":
         return JSONResponse({"ok": False, "error": "Unesite RESET za potvrdu."})
     with STATE_LOCK:
-        for k in ["sessions", "tokens", "events", "injects", "responses", "media_feed", "team_phases", "phase_locks"]:
+        for k in ["sessions", "tokens", "events", "injects", "responses", "media_feed", "team_phases", "phase_locks", "team_leaders"]:
             STATE[k].clear() if isinstance(STATE[k], (dict, list)) else None
         # Keep mod token
         STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator"}
@@ -1635,7 +1794,7 @@ async def api_update_scenario(body: dict):
         PHASES.extend(phases)
         if reset_sessions:
             for k in ["sessions", "tokens", "events", "injects", "responses",
-                      "media_feed", "team_phases", "phase_locks"]:
+                      "media_feed", "team_phases", "phase_locks", "team_leaders"]:
                 STATE[k].clear() if isinstance(STATE[k], (dict, list)) else None
             STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator"}
     log_event("SCENARIO_UPDATE", token, "", "Moderator",
@@ -1865,6 +2024,7 @@ async def api_observe_dashboard(key: str):
         team_score = sum(s["score"] for _, s in members)
         phases_done = [STATE["team_phases"].get(tp_key(team, i), {}).get("status") == "done"
                        for i in range(len(PHASES))]
+        leader = get_team_leader(team)
         teams_data.append({
             "team": team, "icon": ROLE_CARDS[team]["icon"],
             "members": [{"name": s["name"], "score": s["score"],
