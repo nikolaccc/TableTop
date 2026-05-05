@@ -1,0 +1,105 @@
+/* GLOBAL */
+body {
+    margin: 0;
+    padding: 0;
+    background: #0b0f14;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+a {
+    color: #4cc9f0;
+    text-decoration: none;
+}
+
+h1, h2, h3 {
+    margin-bottom: 10px;
+}
+
+/* LAYOUT */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.row {
+    display: flex;
+    gap: 20px;
+}
+
+.column {
+    flex: 1;
+}
+
+/* CARD */
+.card {
+    background: #11161c;
+    border: 1px solid #1f2933;
+    border-radius: 10px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+/* BUTTON */
+button {
+    background: #1f6feb;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+    width: 100%;
+}
+
+button:hover {
+    background: #388bfd;
+}
+
+/* INPUT */
+input, select {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: #0f141a;
+    border: 1px solid #30363d;
+    color: white;
+    border-radius: 6px;
+}
+
+/* LIVE FEED */
+.feed {
+    background: #0f141a;
+    border: 1px solid #1f2933;
+    padding: 10px;
+    height: 250px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+.feed-item {
+    margin-bottom: 8px;
+}
+
+/* PHASE */
+.phase {
+    font-size: 18px;
+    font-weight: bold;
+    color: #4cc9f0;
+}
+
+/* MOBILE */
+@media (max-width: 768px) {
+    .row {
+        flex-direction: column;
+    }
+
+    .container {
+        padding: 10px;
+    }
+
+    button {
+        padding: 14px;
+    }
+}
