@@ -231,8 +231,11 @@ const storedToken = localStorage.getItem('bg_token');
 if (storedToken) {
   fetch(`/api/phase_state?token=${storedToken}`)
     .then(r=>r.json())
-    .then(d => { if(d.ok) window.location.href=`/play?token=${storedToken}`; })
-    .catch(()=>{});
+    .then(d => {
+      if(d.ok) window.location.href=`/play?token=${storedToken}`;
+      else localStorage.removeItem('bg_token');
+    })
+    .catch(()=>{ localStorage.removeItem('bg_token'); });
 }
 </script>
 {% endblock %}

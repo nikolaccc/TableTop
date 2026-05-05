@@ -3,7 +3,7 @@
 
 {% block topbar_right %}
 <span class="badge badge-muted mono" id="scoreBadge">🏆 {{ session.score }} pts</span>
-<a href="/" class="btn btn-ghost btn-sm">← Izlaz</a>
+<button class="btn btn-ghost btn-sm" onclick="logoutNow()">← Izlaz iz sesije</button>
 {% endblock %}
 
 {% block extra_head %}
@@ -327,7 +327,7 @@ async function startPhase() {
   loadPhaseUI();
 }
 
-function loadPhaseUI() {
+function loadPhaseUI(elapsed=0) {
   const p = PHASES_JSON[currentPhase];
   if (!p) { show('doneSection'); return; }
 
@@ -368,7 +368,7 @@ function loadPhaseUI() {
   });
 
   updateProgress();
-  startTimer(0);
+  startTimer(elapsed);
   show('phaseSection');
   updateStepper(currentPhase);
   startPoll();
@@ -429,7 +429,22 @@ function startPoll() {
 async function doPoll() {
   try {
     const r = await api(`/api/phase_state?token=${TOKEN}`);
-    if (!r.ok) return;
+    if (!r.ok) {
+      if (r.session_expired) {
+        clearInterval(pollInterval);
+        try { localStorage.removeItem('bg_token'); } catch(e) {}
+        toast(r.error || 'Sesija je istekla. Prijavite se ponovo.', 'error');
+        setTimeout(()=>window.location.href='/', 1200);
+      }
+      return;
+    }
+    if (typeof r.phase === 'number' && r.phase !== currentPhase) {
+      currentPhase = r.phase;
+      updateStepper(currentPhase);
+    }
+    if (Array.isArray(r.my_answers) && r.my_answers.length === 4 && selected.every(x=>x===null)) {
+      selected = r.my_answers;
+    }
     // Update score
     document.getElementById('scoreVal').textContent = r.score;
     document.getElementById('scoreBadge').textContent = `🏆 ${r.score} pts`;
@@ -449,6 +464,22 @@ async function doPoll() {
       stopTimer();
       if (r.submitted_by) toast(`Timski konsenzus je već predat (${r.submitted_by}).`, 'info');
       showResults(r);
+      return;
+    }
+
+    // Refresh recovery: if the browser reloads mid-phase, rebuild the proper view.
+    if (currentView === 'idleSection' && r.active_started && !r.consensus_done) {
+      if (r.my_submitted) {
+        show('waitSection');
+        document.getElementById('waitText').textContent = `${r.submitted_count} / ${r.total_members} članova predalo odgovor`;
+        buildTeamStatus(r.submitted_count, r.total_members);
+        if (r.submitted_count >= r.total_members && r.total_members > 0) {
+          if (r.is_leader) showConsensus();
+          else showLeaderWait(r.leader_name, r.has_leader);
+        }
+      } else {
+        loadPhaseUI(r.elapsed || 0);
+      }
       return;
     }
 
@@ -655,6 +686,13 @@ async function loadMedia() {
         <span class="media-text">${x.text}</span>
       </div>
     </div>`).join('');
+}
+
+// ── LOGOUT ───────────────────────────────────────────────────────────────────
+async function logoutNow() {
+  try { await api('/api/logout', {token: TOKEN}); } catch(e) {}
+  try { localStorage.removeItem('bg_token'); } catch(e) {}
+  window.location.href = '/';
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
 {% block topbar_right %}
 <span class="badge badge-red mono">MOD</span>
 <span class="badge badge-muted mono" style="font-size:10px;">{{ token }}</span>
-<a href="/" class="btn btn-ghost btn-sm">← Izlaz</a>
+<button class="btn btn-ghost btn-sm" onclick="logoutNow()">← Izlaz</button>
 {% endblock %}
 
 {% block extra_head %}
@@ -507,6 +507,12 @@ async function doReset(){
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+async function logoutNow(){
+  try { await api('/api/logout', {token: MOD_TOKEN}); } catch(e) {}
+  try { localStorage.removeItem('bg_token'); } catch(e) {}
+  window.location.href='/';
+}
 
 loadDash();
 setInterval(loadDash,8000);
