@@ -17,6 +17,7 @@ from pydantic import BaseModel
 # ─── OPTIONAL PDF ────────────────────────────────────────────────────────────
 try:
     from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
     PDF_OK = True
 except ImportError:
     PDF_OK = False
@@ -102,9 +103,15 @@ def db_save():
     try:
         with STATE_LOCK:
             payload = json.dumps({k: STATE[k] for k in STATE}, default=str)
+            phases_payload = json.dumps(PHASES, ensure_ascii=False, default=str)
         with _db() as c:
+            now = time.time()
             c.execute("INSERT OR REPLACE INTO state_blob VALUES(?,?,?)",
-                      ("snap", payload, time.time()))
+                      ("snap", payload, now))
+            # Scenario (PHASES) must survive restarts too — moderator edits via
+            # /api/mod/scenario would otherwise be silently lost on process recycle.
+            c.execute("INSERT OR REPLACE INTO state_blob VALUES(?,?,?)",
+                      ("phases", phases_payload, now))
             c.commit()
     except Exception as e:
         print(f"[DB save] {e}")
@@ -113,12 +120,21 @@ def db_load():
     try:
         with _db() as c:
             row = c.execute("SELECT value FROM state_blob WHERE key=?", ("snap",)).fetchone()
+            phases_row = c.execute("SELECT value FROM state_blob WHERE key=?", ("phases",)).fetchone()
         if row:
             data = json.loads(row["value"])
             with STATE_LOCK:
                 for k, v in data.items():
                     if k in STATE:
                         STATE[k] = v
+        if phases_row:
+            loaded_phases = json.loads(phases_row["value"])
+            if isinstance(loaded_phases, list) and loaded_phases:
+                ok, _err = _validate_scenario(loaded_phases)
+                if ok:
+                    with STATE_LOCK:
+                        PHASES.clear()
+                        PHASES.extend(loaded_phases)
     except Exception as e:
         print(f"[DB load] {e}")
 
@@ -351,7 +367,7 @@ PHASES = [
                   "Ne, jer je to privatni sporazum između EDG i napadača bez javnopravnih posledica"],
                  1, "Plaćanje sancionisanim entitetima je zabranjeno — pre plaćanja neophodna je provera liste sankcija i pravno mišljenje."],
                 ["Email dolazi sa domena koji liči na interni ali nije identičan. Kakav je to pravni kvalifikator za napadača?",
-                 ["Prevara kroz lažno predstavljanje, kombinovano sa mogućom računarskom sabotatažom kao delom šire operacije",
+                 ["Prevara kroz lažno predstavljanje, kombinovano sa mogućom računarskom sabotažom kao delom šire operacije",
                   "Samo administrativni prekršaj — nije krivično delo bez dokazane materijalne štete",
                   "Nije krivično kvalifikovano jer domen nije identičan internom — sličnost nije prevara",
                   "Jedino civilna odgovornost registra domena koji je dozvolio sličan naziv"],
@@ -521,7 +537,7 @@ PHASES = [
             "PR tim": [
                 ["Mediji objavljuju '1,2 miliona građana hakovano' — EDG još nije potvrdio tačan broj. Šta radi PR?",
                  ["Odmah potvrditi broj da se ne izgubi kredibilitet i medijima se čini usluga",
-                  "Korigovati sa: 'Istraga utvrđuje tačan obim — nije potvrđeno da su svi podaci kompromirani'",
+                  "Korigovati sa: 'Istraga utvrđuje tačan obim — nije potvrđeno da su svi podaci kompromitovani'",
                   "Ignorisati medijsku objavu i fokusirati se na tehničke aspekte",
                   "Tužiti medij za objavljivanje neproverenih informacija"],
                  1, "Potvrđivanje nepotvrđenih brojeva je greška — korekcija sa pozivom na tačnost gradi kredibilitet."],
@@ -616,7 +632,7 @@ PHASES = [
             "Pravni tim": [
                 ["Korišćenje AI-generisanog glasa u svrhu prevare — kako se kvalifikuje po važećem KZ Srbije?",
                  ["Nije krivično delo jer AI sistem, a ne čovek, generiše glas koji se koristi",
-                  "Prevara uz upotrebu informacione tehnologije, moguće kombinovana sa računarskom sabotatažom kao deo šire kriminalne operacije",
+                  "Prevara uz upotrebu informacione tehnologije, moguće kombinovana sa računarskom sabotažom kao deo šire kriminalne operacije",
                   "Jedino krivična odgovornost kompanije koja je razvila AI sistem korišćen za prevaru",
                   "Isključivo parnična odgovornost — krivičnog elementa nema jer nije primenjena direktna sila"],
                  1, "KZ čl. 208 i čl. 302 pokrivaju ovakvu situaciju — AI je sredstvo izvršenja, a odgovornost je na licu koje ga koristi."],
@@ -685,7 +701,7 @@ PHASES = [
                   "Ekspertska analiza audio spektra, poređenje sa autentičnim snimcima glasa, AI detekcija alati, metadata analiza fajla",
                   "Dovoljno je utvrditi da je poruka stigla sa neregistrovanog broja — to je dovoljan dokaz",
                   "Nije moguće pravno dokazati — AI glas je pravno neraspoznatljiv od pravog i sudovi to prihvataju"],
-                 1, "Audio forenzika kombinovana sa AI detekcijom alata može biti veštačko dokazno sredstvo prihvatljivo na sudu."],
+                 1, "Audio forenzika kombinovana sa AI detekcijom alata kao nalaz veštačenja može biti dokazno sredstvo prihvatljivo na sudu."],
                 ["CEO fraud je međunarodno rasprostranjen oblik kriminala. Koji mehanizmi međunarodne koordinacije postoje?",
                  ["Nema mehanizama — svaka istraga CEO frauda je strogo nacionalna bez međunarodne dimenzije",
                   "Interpol, Europol i EC3 imaju specijalizovane timove i mehanizme za CEO fraud i BEC istrage",
@@ -814,7 +830,7 @@ PHASES = [
                   "Interpol difuzija, crvena obaveštenja, MLA zahtev, Europol koordinacija i potencijalni zahtev za izručenje",
                   "Jedino direktna saradnja sa policijom te države bez formalnih kanala",
                   "Krivično gonjenje je moguće jedino ako osumnjičeni dobrovoljno dođe u Srbiju"],
-                 1, "Kombinacija formalnih mehanizama — Interpol, MLA, Europol — daje najboljе izglede za identifikaciju i procesuiranje."],
+                 1, "Kombinacija formalnih mehanizama — Interpol, MLA, Europol — daje najbolje izglede za identifikaciju i procesuiranje."],
                 ["Koji su ključni forenzički dokazi potrebni za osnivanje optužnice?",
                  ["Samo OSINT dokazi i novinski izveštaji su dovoljni za podizanje optužnice",
                   "Digitalni forenzički dokazi sa chain of custody, veštačka mišljenja, finansijska dokumentacija, svedočenja i međunarodni dokazi",
@@ -871,11 +887,11 @@ PHASES = [
                   "Slati samo pravni tim jer se radi o regulatornom pitanju"],
                  1, "Kompanija koja je prošla incident ima jedinstven uvid koji je vredan doprinos sistemskim merama — angažovanje je i obaveza i šansa."],
                 ["Koje su dugoročne organizacione promene koje Izvršni bord mora sprovesti?",
-                 ["Promena PR direktora i IT menadžera kao odgovornih za propuste u komuniciranaju i tehnici",
+                 ["Promena PR direktora i IT menadžera kao odgovornih za propuste u komuniciranju i tehnici",
                   "Uspostavljanje CISO pozicije, kriznog komiteta, godišnjih vežbi i kontinuiranog bezbednosnog programa",
                   "Kupovina novog bezbednosnog softvera je jedina potrebna promena",
-                  "Nikakve — incident je bio nepreditkiv i nije indikator sistemskih slabosti"],
-                 1, "Incident je razotkriio organizacione slabosti — strukturne promene u upravljanju bezbednošću su jedini odgovarajući odgovor."],
+                  "Nikakve — incident je bio nepredvidiv i nije indikator sistemskih slabosti"],
+                 1, "Incident je razotkrio organizacione slabosti — strukturne promene u upravljanju bezbednošću su jedini odgovarajući odgovor."],
                 ["Kako Izvršni bord komunicira prema akcionarima i investitorima posle incidenta?",
                  ["Minimizirati incident u komunikaciji sa akcionarima da se zaštiti vrednost akcija",
                   "Transparentna komunikacija o incidentu, merama odgovora, nastaloj šteti i planovima unapređenja",
@@ -915,7 +931,7 @@ PHASES = [
                   "Zero Trust arhitektura, MFA za sve pristupe, redovno testiranje backup-a, EDR na OT sistemima, 24/7 SOC, vendor risk management",
                   "Kupovina novog NGFW rešenja renomiranog proizvođača kao centralna mera",
                   "Fizičko odvajanje IT i OT mreže kao jedina suštinska i dovoljna mera"],
-                 1, "Incident je razotkriven višestruke slabosti — jedna tačkasta mera ne može adresirati sistemski bezbednosni deficit."],
+                 1, "Incident je razotkrio višestruke slabosti — jedna tačkasta mera ne može adresirati sistemski bezbednosni deficit."],
                 ["Kako IT/CERT dokumentuje incident za threat intelligence zajednicu i buduće vežbe?",
                  ["Interni izveštaj koji ostaje interno jer su podaci o incidentu poverljivi",
                   "Strukturisani After-Action Report u STIX/TAXII formatu, anonimizovana razmena sa CERT mrežama",
@@ -976,12 +992,12 @@ PHASES = [
                   "Odbiti nastup jer je incident suviše svež za javnu međunarodnu diskusiju",
                   "Prezentovati samo tehničke detalje napada bez diplomatskog i normativnog konteksta"],
                  1, "Multilateralni forumi su idealan prostor za normativni doprinos bez eksponiranja osetljivih operativnih detalja."],
-                ["Koji je dugoročni diplomatski cilj Srbije u domenu sajber bezbednosti posle ovog incidenta?",
-                 ["Razviti sopstvene ofanzivne sajber kapacitete za odvraćanje potencijalnih napadača",
-                  "Jačanje bilateralne i multilateralne saradnje, izgradnja kapaciteta i aktivno učešće u normativnim procesima",
-                  "Izolacija digitalnih sistema — smanjiti međunarodnu izloženost smanjenjem konekcija",
-                  "Prepustiti sajber bezbednost u potpunosti privatnom sektoru koji je fleksibilniji od državnih struktura"],
-                 1, "Srbija kao mala zemlja maksimizira uticaj kroz saradnju i normativno angažovanje — izolacija je kontraproduktivna."]
+                ["Vežba je pokazala da Srbiji nedostaje stalni kapacitet za sajber diplomatiju. Koja institucionalna mera je najprikladnija?",
+                 ["Sajber pitanja prepustiti ad hoc radnim grupama koje se formiraju tek kada incident nastupi",
+                  "Imenovanje koordinatora za sajber diplomatiju, obuka diplomatskog kadra i stalna tačka kontakta za međunarodne sajber incidente",
+                  "Otvaranje posebnog ministarstva za sajber prostor sa punim resorom",
+                  "Sajber diplomatija nije potrebna — tehnički organi mogu samostalno komunicirati sa inostranstvom"],
+                 1, "Stalni koordinator i obučen kadar omogućavaju brzu i kompetentnu reakciju — ad hoc improvizacija je upravo slabost koju je vežba razotkrila."]
             ]
         }
     }
@@ -1201,11 +1217,9 @@ async def startup():
 def get_session(token: str):
     tok = (token or "").strip().upper()
     s = STATE["sessions"].get(tok)
-    # Important on Azure if more than one worker was accidentally configured:
-    # load the latest persisted snapshot before declaring a session inactive.
-    if not s:
-        db_load()
-        s = STATE["sessions"].get(tok)
+    # NOTE: no db_load() fallback here. The app must run with exactly ONE worker
+    # (see startup.sh) — reloading the snapshot mid-request would overwrite newer
+    # in-memory state with an older copy and silently lose submitted answers.
     if s and session_is_expired(s):
         release_session(tok, "SESSION_EXPIRED")
         return None
@@ -1221,6 +1235,35 @@ def expected_answer_count(team: str, phase_idx: int) -> int:
         return count or 4
     except Exception:
         return 4
+
+def phase_questions(team: str, phase_idx: int) -> list:
+    """All questions (shared + team-specific) for one team in one phase."""
+    if phase_idx < 0 or phase_idx >= len(PHASES):
+        return []
+    qs = PHASES[phase_idx].get("questions", {})
+    all_q = []
+    if qs.get("shared"):
+        all_q.append(qs["shared"])
+    all_q.extend(list(qs.get(team, []))[:3])
+    return all_q
+
+def validate_answers(team: str, phase_idx: int, answers) -> tuple[bool, str]:
+    """Reject any answer that is not one of the offered options.
+
+    Critical: consensus is single-submit and locks the phase. Without this check
+    a malformed/tampered payload would permanently zero the team's score.
+    """
+    all_q = phase_questions(team, phase_idx)
+    if not all_q:
+        return False, "Faza nije pronađena."
+    if not isinstance(answers, list) or len(answers) != len(all_q):
+        return False, f"Odgovorite na sva pitanja ({len(all_q)})."
+    for i, q in enumerate(all_q):
+        opts = q[1] if len(q) > 1 and isinstance(q[1], list) else []
+        if answers[i] not in opts:
+            return False, (f"Odgovor na pitanje {i+1} nije među ponuđenim opcijama. "
+                           "Osvežite stranicu i pokušajte ponovo.")
+    return True, ""
 
 def build_consensus_result(team: str, phase_idx: int, answers: list):
     """Evaluate a team consensus once and return serializable result data."""
@@ -1271,11 +1314,7 @@ def get_consensus_payload(team: str, phase_idx: int, tp: dict | None = None):
 
 def get_token_meta(token: str):
     tok = (token or "").strip().upper()
-    meta = STATE["tokens"].get(tok)
-    if not meta:
-        db_load()
-        meta = STATE["tokens"].get(tok)
-    return meta
+    return STATE["tokens"].get(tok)
 
 def require_mod(token: str):
     meta = get_token_meta(token)
@@ -1447,9 +1486,9 @@ async def api_submit_individual(body: dict):
         return JSONResponse({"ok": False, "error": "Sesija nije aktivna."})
     answers = body.get("answers", [])
     phase_idx = s.get("phase", 0)
-    expected_q = expected_answer_count(s["team"], phase_idx)
-    if len(answers) != expected_q or any(not a for a in answers):
-        return JSONResponse({"ok": False, "error": f"Odgovorite na sva pitanja ({expected_q})."})
+    valid, verr = validate_answers(s["team"], phase_idx, answers)
+    if not valid:
+        return JSONResponse({"ok": False, "error": verr})
     key = tp_key(s["team"], phase_idx)
     with STATE_LOCK:
         tp = STATE["team_phases"].setdefault(key, {"individual": {}, "consensus": [], "status": "active", "participants": []})
@@ -1494,9 +1533,9 @@ async def api_submit_consensus(body: dict):
 
     answers = body.get("answers", [])
     phase_idx = s.get("phase", 0)
-    expected_q = expected_answer_count(s["team"], phase_idx)
-    if len(answers) != expected_q or any(not a for a in answers):
-        return JSONResponse({"ok": False, "error": f"Odgovorite na sva pitanja ({expected_q})."})
+    valid, verr = validate_answers(s["team"], phase_idx, answers)
+    if not valid:
+        return JSONResponse({"ok": False, "error": verr})
     key = tp_key(s["team"], phase_idx)
 
     with STATE_LOCK:
@@ -1626,10 +1665,15 @@ async def api_respond_inject(body: dict):
     s = get_session(token)
     if not s:
         return JSONResponse({"ok": False, "error": "Sesija nije aktivna."})
-    inject_id = body.get("inject_id", "").strip()
-    text      = body.get("text", "").strip()
+    inject_id = str(body.get("inject_id", "")).strip()
+    text      = str(body.get("text", "")).strip()[:2000]
     if not inject_id or not text:
         return JSONResponse({"ok": False, "error": "Unesite ID poruke i odgovor."})
+    # inject_id is rendered in the moderator panel — accept only IDs of injects
+    # that actually exist, so participants can't smuggle arbitrary strings.
+    known_ids = {x.get("id") for x in STATE["injects"]}
+    if inject_id not in known_ids:
+        return JSONResponse({"ok": False, "error": "Nepoznat ID poruke. Proverite ID iz primljenog injecta."})
     with STATE_LOCK:
         STATE["responses"].append({
             "time": now_str(), "ts": time.time(),
@@ -1738,7 +1782,11 @@ async def api_mod_unlock(body: dict):
 async def api_mod_unlock_all(body: dict):
     token = str(body.get("token", "")).strip().upper()
     require_mod(token)
-    phase_idx = int(body.get("phase", 0))
+    try:
+        phase_idx = int(body.get("phase", 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Nevalidan broj faze."})
+    phase_idx = max(0, min(phase_idx, len(PHASES) - 1))
     with STATE_LOCK:
         for team in TEAMS:
             STATE["phase_locks"][team] = phase_idx
@@ -1753,7 +1801,11 @@ async def api_mod_inject(body: dict):
     msg    = str(body.get("msg", "")).strip()
     target = str(body.get("target", "Svi timovi"))
     sender = str(body.get("sender", "Moderator"))
-    deadline = int(body.get("deadline", 5))
+    try:
+        deadline = int(body.get("deadline", 5))
+    except (TypeError, ValueError):
+        deadline = 5
+    deadline = max(1, min(deadline, 120))
     if not msg:
         return JSONResponse({"ok": False, "error": "Unesite poruku."})
     inj = {
@@ -1972,7 +2024,7 @@ def _generate_pdf():
 
     def txt(t, size=9):
         pdf.set_font("Helvetica", "", size)
-        pdf.multi_cell(0, 5, _ascii(t))
+        pdf.multi_cell(0, 5, _ascii(t), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     def kv(k, v):
         pdf.set_font("Helvetica", "B", 9)
@@ -2055,7 +2107,9 @@ def _generate_pdf():
     for e in STATE["events"][-80:]:
         pdf.set_font("Helvetica", "", 8)
         line = f"[{e['time']}] {e['kind']} | {e.get('team','')} | {e.get('name','')} | {e.get('details','')}"
-        pdf.multi_cell(0, 4, _ascii(line[:120]))
+        # new_x/new_y: fpdf2 >= 2.5 leaves the cursor at end-of-line after multi_cell,
+        # which made every 2nd line raise "Not enough horizontal space" and broke export.
+        pdf.multi_cell(0, 4, _ascii(line[:120]), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     path = f"/tmp/blackgrid_aar_{uuid.uuid4().hex[:8]}.pdf"
     pdf.output(path)
