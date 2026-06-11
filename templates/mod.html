@@ -355,7 +355,7 @@ async function loadRespLog() {
   if(!r.length){el.innerHTML='<div class="text-dim text-sm">Nema odgovora.</div>';return;}
   el.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Vreme</th><th>Tim</th><th>Ime</th><th>ID</th><th>Odgovor</th></tr></thead><tbody>
     ${r.slice().reverse().map(x=>`<tr><td>${x.time}</td><td>${esc(x.team)}</td><td>${esc(x.name)}</td>
-    <td><code style="font-family:var(--mono);font-size:11px;">${x.inject_id}</code></td><td>${esc(x.text)}</td></tr>`).join('')}
+    <td><code style="font-family:var(--mono);font-size:11px;">${esc(x.inject_id)}</code></td><td>${esc(x.text)}</td></tr>`).join('')}
   </tbody></table></div>`;
 }
 
@@ -506,7 +506,7 @@ async function doReset(){
   st.innerHTML=r.ok?'<div class="alert alert-success">✅ Vežba resetovana.</div>':`<div class="alert alert-error">${r.error}</div>`;
 }
 
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function esc(s){return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 async function logoutNow(){
   try { await api('/api/logout', {token: MOD_TOKEN}); } catch(e) {}

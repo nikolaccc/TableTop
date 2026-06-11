@@ -392,16 +392,16 @@ function loadPhaseUI(elapsed=0) {
   card.innerHTML = `
     <div class="phase-header">
       <span class="badge badge-red">Operation Black Grid</span>
-      <span class="phase-clock">${p.clock}</span>
+      <span class="phase-clock">${esc(p.clock)}</span>
       <span class="phase-num">F${currentPhase+1} / ${PHASE_COUNT}</span>
     </div>
-    <div class="phase-title-text">${p.title}</div>
-    <div class="phase-narrative">${p.narrative}</div>
+    <div class="phase-title-text">${esc(p.title)}</div>
+    <div class="phase-narrative">${esc(p.narrative)}</div>
     <div class="phase-visual-wrap">
       <div class="phase-visual-label">📄 DOKAZNI MATERIJAL</div>
-      <div class="phase-visual">${p.visual}</div>
+      <div class="phase-visual">${esc(p.visual)}</div>
       <div class="phase-inject-label">📢 LIVE INJECT</div>
-      <div class="phase-inject">${p.inject}</div>
+      <div class="phase-inject">${esc(p.inject)}</div>
     </div>`;
 
   // Fill questions
@@ -651,8 +651,8 @@ function showConsensus(state=null) {
   card.innerHTML = `<div class="kicker mb-12">Vaši individualni odgovori</div>` +
     selected.map((ans, i) => `
       <div class="card-inset mb-8">
-        <div class="text-xs text-dim mb-4">Pitanje ${i+1}: ${allQ[i][0]}</div>
-        <div style="font-size:14px;color:#fff;font-weight:600;">${ans || '—'}</div>
+        <div class="text-xs text-dim mb-4">Pitanje ${i+1}: ${esc(allQ[i][0])}</div>
+        <div style="font-size:14px;color:#fff;font-weight:600;">${esc(ans || '—')}</div>
       </div>`).join('');
 
   document.getElementById('consensusTitle').textContent = 'Šef tima — predaja konačnog timskog konsenzusa';
@@ -665,10 +665,10 @@ function showConsensus(state=null) {
   const form = document.getElementById('consensusForm');
   form.innerHTML = allQ.map((q, qi) => `
     <div class="input-group">
-      <label class="input-label">Konsenzus ${['❶','❷','❸','❹'][qi]}: ${q[0].substring(0,60)}${q[0].length>60?'…':''}</label>
+      <label class="input-label">Konsenzus ${['❶','❷','❸','❹'][qi]}: ${esc(q[0].substring(0,60))}${q[0].length>60?'…':''}</label>
       <select class="input" id="cq${qi}">
         <option value="">Izaberite timski odgovor…</option>
-        ${q[1].map(opt=>`<option value="${opt}">${opt}</option>`).join('')}
+        ${q[1].map(opt=>`<option value="${esc(opt)}">${esc(opt)}</option>`).join('')}
       </select>
     </div>`).join('');
 
@@ -735,10 +735,10 @@ function showResults(r) {
 
   results.forEach((res, i) => {
     html += `<div class="result-item ${res.ok?'ok':'bad'} mb-8">
-      <div class="result-q">${res.ok?'✅':'❌'} ${res.question}</div>
-      <div class="result-row"><span style="color:var(--text-muted);">Odgovor:</span> ${res.selected}</div>
-      ${!res.ok?`<div class="result-row"><span style="color:var(--text-muted);">Tačno:</span> ${res.correct}</div>`:''}
-      <div class="result-expl">💡 ${res.explain}</div>
+      <div class="result-q">${res.ok?'✅':'❌'} ${esc(res.question)}</div>
+      <div class="result-row"><span style="color:var(--text-muted);">Odgovor:</span> ${esc(res.selected)}</div>
+      ${!res.ok?`<div class="result-row"><span style="color:var(--text-muted);">Tačno:</span> ${esc(res.correct)}</div>`:''}
+      <div class="result-expl">💡 ${esc(res.explain)}</div>
     </div>`;
   });
 
@@ -775,16 +775,16 @@ async function goNextPhase() {
     <div class="phase-card mb-16">
       <div class="phase-header">
         <span class="badge badge-red">Operation Black Grid</span>
-        <span class="phase-clock">${p.clock}</span>
+        <span class="phase-clock">${esc(p.clock)}</span>
         <span class="phase-num">F${currentPhase+1} / ${PHASE_COUNT}</span>
       </div>
-      <div class="phase-title-text">${p.title}</div>
-      <div class="phase-narrative">${p.narrative}</div>
+      <div class="phase-title-text">${esc(p.title)}</div>
+      <div class="phase-narrative">${esc(p.narrative)}</div>
       <div class="phase-visual-wrap">
         <div class="phase-visual-label">📄 DOKAZNI MATERIJAL</div>
-        <div class="phase-visual">${p.visual}</div>
+        <div class="phase-visual">${esc(p.visual)}</div>
         <div class="phase-inject-label">📢 LIVE INJECT</div>
-        <div class="phase-inject">${p.inject}</div>
+        <div class="phase-inject">${esc(p.inject)}</div>
       </div>
     </div>
     <button class="btn btn-primary btn-full" id="startBtn" onclick="startPhase()">▶&nbsp; Pokreni Fazu ${currentPhase+1}</button>`;
@@ -800,12 +800,12 @@ async function loadInjects() {
   el.innerHTML = r.slice().reverse().map(x=>`
     <div class="inject-item">
       <div class="inject-meta">
-        <span class="inject-sender">${x.sender}</span>
-        <span class="inject-time">${x.time}</span>
-        <span class="badge badge-amber" style="font-size:9px;">⏳ ${x.deadline}min</span>
+        <span class="inject-sender">${esc(x.sender)}</span>
+        <span class="inject-time">${esc(x.time)}</span>
+        <span class="badge badge-amber" style="font-size:9px;">⏳ ${esc(x.deadline)}min</span>
       </div>
-      <div class="inject-id">ID: <code style="font-family:var(--mono);font-size:11px;">${x.id}</code></div>
-      <div class="inject-msg">${x.msg}</div>
+      <div class="inject-id">ID: <code style="font-family:var(--mono);font-size:11px;">${esc(x.id)}</code></div>
+      <div class="inject-msg">${esc(x.msg)}</div>
     </div>`).join('');
 }
 
@@ -827,15 +827,15 @@ async function loadMedia() {
   const el = document.getElementById('mediaFeed');
   if (!r.length) { el.innerHTML='<div class="card-inset text-dim text-sm">Nema novih objava.</div>'; return; }
   el.innerHTML = r.slice().reverse().map(x=>`
-    <div class="media-item ${x.kind==='breaking'?'breaking':x.sentiment||''}">
+    <div class="media-item ${x.kind==='breaking'?'breaking':esc(x.sentiment||'')}">
       <div class="media-head">
-        <span class="media-channel">${x.channel||''}</span>
-        <span class="media-time">${x.time}</span>
+        <span class="media-channel">${esc(x.channel||'')}</span>
+        <span class="media-time">${esc(x.time)}</span>
         ${x.kind==='breaking'?'<span class="badge badge-red">🚨 BREAKING</span>':''}
       </div>
       <div class="media-body">
-        <span class="media-icon">${x.icon||'📰'}</span>
-        <span class="media-text">${x.text}</span>
+        <span class="media-icon">${esc(x.icon||'📰')}</span>
+        <span class="media-text">${esc(x.text)}</span>
       </div>
     </div>`).join('');
 }
