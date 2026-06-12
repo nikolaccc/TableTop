@@ -212,11 +212,16 @@
     </div>
   </div>
 
-  <!-- ─── DONE ──────────────────────────────────────────── -->
-  <div id="doneSection" class="card text-center" style="padding:40px 24px;">
-    <div style="font-size:44px;margin-bottom:12px;">🏆</div>
-    <h2>Vežba završena!</h2>
-    <p class="text-dim mt-8">Sačekajte moderatora za debriefing i finalnu analizu.</p>
+  <!-- ─── DONE / DEBRIEF ────────────────────────────────── -->
+  <div id="doneSection">
+    <div class="card text-center" style="padding:32px 24px;">
+      <div style="font-size:44px;margin-bottom:12px;">🏆</div>
+      <h2>Vežba završena!</h2>
+      <p class="text-dim mt-8">Pregled rezultata vašeg tima i konačan plasman.</p>
+    </div>
+    <div id="debriefContent" class="mt-16">
+      <div class="card-inset text-dim text-sm">Učitavanje rezultata…</div>
+    </div>
   </div>
 
   <!-- ─── MODERATOR MESSAGES ─────────────────────────────── -->
@@ -270,7 +275,7 @@ let submitWatchdog = null;
 let pollInterval = null;
 let timerInterval = null;
 let timerStart = null;
-const TIMER_TOTAL = 360; // 6 minutes
+let TIMER_TOTAL = {{ time_limit }} * 60; // moderator setting; 0 = countdown off
 
 // ── PHASE DATA (preloaded from Jinja) ─────────────────────────────────────────
 const PHASES_JSON = {{ phases_json|safe }};
@@ -334,6 +339,7 @@ function resetSubmitState() {
 
 // ── TIMER ─────────────────────────────────────────────────────────────────────
 function startTimer(elapsed=0) {
+  if (!TIMER_TOTAL) { stopTimer(); return; } // tajmer iskljucen od strane moderatora
   document.getElementById('timerWrap').style.display='block';
   timerStart = Date.now() - elapsed * 1000;
   if (timerInterval) clearInterval(timerInterval);
@@ -347,6 +353,7 @@ function stopTimer() {
 }
 
 function updateTimer() {
+  if (!TIMER_TOTAL) { stopTimer(); return; }
   const elapsed = Math.floor((Date.now() - timerStart) / 1000);
   const rem = Math.max(0, TIMER_TOTAL - elapsed);
   const m = Math.floor(rem/60), s = rem%60;
@@ -385,7 +392,7 @@ async function startPhase() {
 function loadPhaseUI(elapsed=0) {
   if (state && Array.isArray(state.my_answers) && state.my_answers.length) selected = state.my_answers.slice(0,4);
   const p = PHASES_JSON[currentPhase];
-  if (!p) { show('doneSection'); return; }
+  if (!p) { show('doneSection'); loadDebrief(); return; }
 
   // Fill phase card
   const card = document.getElementById('phaseCardActive');
@@ -534,6 +541,18 @@ async function doPoll() {
     }
 
     const currentView = getCurrentView();
+
+    // Moderator can change the per-phase time limit live.
+    if (typeof r.time_limit_min === 'number') {
+      const newTotal = r.time_limit_min * 60;
+      if (newTotal !== TIMER_TOTAL) {
+        TIMER_TOTAL = newTotal;
+        if (currentView === 'phaseSection') {
+          if (TIMER_TOTAL) startTimer(r.elapsed || 0);
+          else stopTimer();
+        }
+      }
+    }
 
     // If any member already submitted team consensus, all other members must
     // move to the same read-only result. This prevents duplicate consensus UX.
@@ -751,6 +770,7 @@ function showResults(r) {
     document.getElementById('nextBtnWrap').style.display='none';
     document.getElementById('waitNextBox').style.display='none';
     document.getElementById('doneSection').style.display='block';
+    loadDebrief();
   } else {
     document.getElementById('waitNextBox').style.display='block';
     startPoll(); // poll for moderator unlock
@@ -806,7 +826,74 @@ async function loadInjects() {
       </div>
       <div class="inject-id">ID: <code style="font-family:var(--mono);font-size:11px;">${esc(x.id)}</code></div>
       <div class="inject-msg">${esc(x.msg)}</div>
+      <button class="btn btn-ghost btn-sm mt-8" onclick="prefillInjectResp('${esc(x.id)}')">↩ Odgovori</button>
     </div>`).join('');
+}
+
+// ── DEBRIEF ───────────────────────────────────────────────────────────────────
+let debriefLoaded = false;
+async function loadDebrief() {
+  if (debriefLoaded) return;
+  const el = document.getElementById('debriefContent');
+  const r = await api(`/api/debrief?token=${TOKEN}`, null, 'GET');
+  if (!r || !r.ok) {
+    el.innerHTML = `<div class="card-inset text-dim text-sm">${esc((r && r.error) || 'Rezultati još nisu dostupni.')}</div>`;
+    return;
+  }
+  debriefLoaded = true;
+  const pct = r.total_max ? Math.round(r.total / r.total_max * 100) : 0;
+
+  let html = `
+    <div class="card mb-12" style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;">
+        <div class="kicker">Ukupan skor tima — ${esc(r.team)}</div>
+        <div style="font-family:var(--mono);font-size:36px;font-weight:700;color:#fff;">${r.total}<span style="font-size:16px;color:var(--text-3);">/${r.total_max}</span></div>
+        <div class="text-dim text-sm mt-4">Ukupna tačnost: ${pct}%</div>
+      </div>
+      <div style="width:80px;height:80px;border-radius:50%;background:conic-gradient(var(--blue) ${pct}%, rgba(255,255,255,.07) 0);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <div style="background:var(--surface);width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:16px;font-weight:700;color:#fff;">${pct}%</div>
+      </div>
+    </div>
+    <div class="kicker mb-8">Rezultati po fazama</div>`;
+
+  r.per_phase.forEach(p => {
+    const ppct = p.max ? Math.round(p.gained / p.max * 100) : 0;
+    html += `
+      <div class="card-inset mb-8">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:200px;">
+            <div class="text-xs text-dim">FAZA ${p.phase}</div>
+            <div style="font-size:13px;color:#fff;font-weight:600;">${esc(p.title)}</div>
+          </div>
+          <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:#fff;">${p.gained}<span style="font-size:12px;color:var(--text-3);">/${p.max}</span></div>
+        </div>
+        <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.07);margin-top:8px;overflow:hidden;">
+          <div style="height:100%;width:${ppct}%;background:${ppct>=75?'var(--green,#22c55e)':ppct>=40?'var(--blue)':'var(--red,#dc2626)'};border-radius:3px;"></div>
+        </div>
+        <div class="text-xs text-dim mt-4">${p.correct}/${p.total_q} tačnih odgovora</div>
+      </div>`;
+  });
+
+  html += `<div class="kicker mb-8 mt-16">Konačan plasman timova</div>`;
+  r.ranking.forEach(t => {
+    const medal = t.rank === 1 ? '🥇' : t.rank === 2 ? '🥈' : t.rank === 3 ? '🥉' : `${t.rank}.`;
+    html += `
+      <div class="card-inset mb-8" style="display:flex;align-items:center;gap:12px;${t.is_mine?'border:1px solid var(--blue);':''}">
+        <div style="font-size:18px;min-width:34px;text-align:center;">${medal}</div>
+        <div style="flex:1;font-size:13px;font-weight:600;color:#fff;">${esc(t.icon)} ${esc(t.team)}${t.is_mine?' <span class="badge badge-blue" style="font-size:9px;">VAŠ TIM</span>':''}</div>
+        <div style="font-family:var(--mono);font-size:16px;font-weight:700;color:#fff;">${t.score} pt</div>
+      </div>`;
+  });
+
+  el.innerHTML = html;
+}
+
+function prefillInjectResp(id) {
+  const idEl = document.getElementById('injId');
+  const respEl = document.getElementById('injResp');
+  idEl.value = id;
+  respEl.scrollIntoView({behavior:'smooth', block:'center'});
+  setTimeout(()=>respEl.focus(), 350);
 }
 
 async function sendInjectResp() {

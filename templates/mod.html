@@ -94,6 +94,18 @@
         <div id="unlockAllStatus" class="mt-8"></div>
       </div>
       <div class="mt-24">
+        <div class="kicker mb-12">⏱ Tajmer faze (soft limit za sve timove)</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+          <div class="input-group" style="width:160px;">
+            <label class="input-label">Minuta po fazi (0 = isključen)</label>
+            <input class="input" type="number" id="phaseTimerMin" min="0" max="120" value="{{ time_limit }}">
+          </div>
+          <button class="btn btn-secondary" onclick="setPhaseTimer()" style="height:var(--tap);">⏱ Postavi tajmer</button>
+        </div>
+        <div class="text-xs text-dim mt-8">Soft limit: istek vremena vizuelno pritiska tim, ali ne blokira predaju odgovora. Promena važi odmah, i za faze u toku.</div>
+        <div id="timerStatus" class="mt-8"></div>
+      </div>
+      <div class="mt-24">
         <div class="kicker mb-12">👁 Observer link (read-only za posmatrače)</div>
         <div class="observer-link">
           <div class="observer-url" id="observerUrl">…</div>
@@ -201,6 +213,19 @@
             <button class="btn btn-secondary btn-sm" onclick="applyScenario(true)" style="border-color:rgba(220,38,38,.4);">⚠️ Zameni i resetuj</button>
           </div>
           <div id="scenarioStatus"></div>
+          <div class="mt-16">
+            <div class="kicker mb-8">📚 Biblioteka scenarija</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+              <div class="input-group" style="flex:1;min-width:180px;">
+                <label class="input-label">Naziv scenarija</label>
+                <input class="input" id="scenName" placeholder="npr. Black Grid v2, Banka, Zdravstvo…" maxlength="60">
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="saveScenarioToLibrary()" style="height:var(--tap);">💾 Sačuvaj aktivni</button>
+            </div>
+            <div class="text-xs text-dim mt-4">Čuva trenutno AKTIVNI scenario pod datim nazivom (ili pregazi postojeći istog naziva).</div>
+            <div id="scenLibStatus" class="mt-8"></div>
+            <div id="scenLibList" class="mt-8"><div class="text-dim text-sm">Učitavanje biblioteke…</div></div>
+          </div>
         </div>
         <div>
           <div class="kicker mb-12">Preview faza</div>
@@ -425,6 +450,17 @@ async function loadDebrief() {
   el.innerHTML=html;
 }
 
+// Tajmer faze
+async function setPhaseTimer(){
+  const el=document.getElementById('phaseTimerMin');
+  const st=document.getElementById('timerStatus');
+  const minutes=parseInt(el.value,10);
+  if(isNaN(minutes)||minutes<0||minutes>120){st.innerHTML='<div class="alert alert-error">Unesite broj 0–120.</div>';return;}
+  const r=await api('/api/mod/set_timer',{token:MOD_TOKEN,minutes});
+  r.ok?(st.innerHTML=`<div class="alert alert-success">✅ Tajmer: ${r.minutes?r.minutes+' min po fazi':'isključen'}.</div>`,toast('Tajmer postavljen.','success'))
+      :(st.innerHTML=`<div class="alert alert-error">${esc(r.error||'Greška.')}</div>`);
+}
+
 // Scenario editor
 async function loadCurrentScenario() {
   const r=await api(`/api/mod/scenario?token=${MOD_TOKEN}`,null,'GET');
@@ -476,6 +512,50 @@ async function applyScenario(resetSessions){
       :(st.innerHTML=`<div class="alert alert-error">${r.error}</div>`);
 }
 
+// Biblioteka scenarija
+async function loadScenarioLibrary(){
+  const el=document.getElementById('scenLibList');
+  const r=await api(`/api/mod/scenario_library?token=${MOD_TOKEN}`,null,'GET');
+  if(!r||!r.ok){el.innerHTML='<div class="text-dim text-sm">Greška učitavanja biblioteke.</div>';return;}
+  if(!r.scenarios.length){el.innerHTML='<div class="card-inset text-dim text-sm">Biblioteka je prazna. Sačuvaj aktivni scenario da kreneš.</div>';return;}
+  window._scenLib = r.scenarios; // indeksni pristup — nazivi sa navodnicima ne lome onclick
+  el.innerHTML=r.scenarios.map((s,i)=>`
+    <div class="card-inset mb-8" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:160px;">
+        <div style="font-size:13px;font-weight:600;color:#fff;">${esc(s.name)}</div>
+        <div class="text-xs text-dim">${s.phases} faza · sačuvano ${esc(s.updated)}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="loadScenarioFromLibrary(_scenLib[${i}].name,false)">▶ Aktiviraj</button>
+      <button class="btn btn-ghost btn-sm" style="border-color:rgba(220,38,38,.35);" onclick="loadScenarioFromLibrary(_scenLib[${i}].name,true)">▶ Aktiviraj + reset</button>
+      <button class="btn btn-ghost btn-sm" onclick="deleteScenarioFromLibrary(_scenLib[${i}].name)">🗑</button>
+    </div>`).join('');
+}
+
+async function saveScenarioToLibrary(){
+  const name=document.getElementById('scenName').value.trim();
+  const st=document.getElementById('scenLibStatus');
+  if(!name){st.innerHTML='<div class="alert alert-error">Unesite naziv.</div>';return;}
+  const r=await api('/api/mod/scenario_save',{token:MOD_TOKEN,name});
+  r.ok?(st.innerHTML=`<div class="alert alert-success">✅ Sačuvano: „${esc(r.name)}" (${r.phases} faza).</div>`,loadScenarioLibrary())
+      :(st.innerHTML=`<div class="alert alert-error">${esc(r.error||'Greška.')}</div>`);
+}
+
+async function loadScenarioFromLibrary(name,resetSessions){
+  const st=document.getElementById('scenLibStatus');
+  if(resetSessions&&!confirm(`Aktiviranje „${name}" uz reset briše SVE sesije i skorove. Nastavi?`))return;
+  if(!resetSessions&&!confirm(`Aktivirati scenario „${name}"? Sesije ostaju.`))return;
+  const r=await api('/api/mod/scenario_load',{token:MOD_TOKEN,name,reset_sessions:resetSessions});
+  r.ok?(st.innerHTML=`<div class="alert alert-success">✅ Aktiviran: „${esc(r.name)}" — ${r.phases} faza.${r.reset?' Sesije resetovane.':''}</div>`,toast('Scenario aktiviran.','success'),loadDash(),loadCurrentScenario())
+      :(st.innerHTML=`<div class="alert alert-error">${esc(r.error||'Greška.')}</div>`);
+}
+
+async function deleteScenarioFromLibrary(name){
+  if(!confirm(`Obrisati „${name}" iz biblioteke?`))return;
+  const r=await api('/api/mod/scenario_delete',{token:MOD_TOKEN,name});
+  if(r.ok){toast('Obrisano.','success');loadScenarioLibrary();}
+  else toast(r.error||'Greška.','error');
+}
+
 // Events
 async function loadEvents(){
   const r=await api(`/api/mod/events?token=${MOD_TOKEN}`,null,'GET');
@@ -517,6 +597,10 @@ async function logoutNow(){
 
 loadDash();
 setInterval(loadDash,8000);
+loadScenarioLibrary();
+document.querySelectorAll('.tab-btn').forEach(b=>b.addEventListener('click',()=>{
+  if(b.dataset.tab==='tabScenario') loadScenarioLibrary();
+}));
 window.addEventListener('DOMContentLoaded',()=>{
   loadPreset('{{ presets.keys()|list|first }}',document.querySelector('.preset-pill'));
 });
