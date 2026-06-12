@@ -138,6 +138,9 @@ def db_init():
         c.execute("PRAGMA synchronous=NORMAL")
         c.execute("""CREATE TABLE IF NOT EXISTS state_blob(
             key TEXT PRIMARY KEY, value TEXT NOT NULL, ts REAL NOT NULL)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS scenarios(
+            name TEXT PRIMARY KEY, value TEXT NOT NULL, phases INTEGER NOT NULL,
+            updated REAL NOT NULL)""")
         c.commit()
 
 def db_save():
@@ -1088,7 +1091,11 @@ STATE = {
     "team_phases":   {},   # "team::phase" -> {individual, consensus, status}
     "phase_locks":   {},   # team -> max unlocked phase index
     "team_leaders":  {},   # team -> {token, name, selected_at}
+    "settings":      {"phase_time_min": 6},   # exercise-wide moderator settings
 }
+
+def get_setting(key, default=None):
+    return STATE.get("settings", {}).get(key, default)
 
 SESSION_TTL = 6 * 3600
 
@@ -1373,6 +1380,7 @@ async def play(request: Request, token: str = ""):
         "is_leader":   is_team_leader(s["team"], tok),
         "leader_name": leader.get("name", "") if leader else "",
         "phases_json": json.dumps(PHASES, ensure_ascii=False),
+        "time_limit":  get_setting("phase_time_min", 6),
     })
     # Refresh cookie so a legacy ?token= visit keeps working after the URL is cleaned.
     return set_auth_cookie(resp, COOKIE_STUDENT, tok, SESSION_TTL)
@@ -1387,6 +1395,7 @@ async def mod_panel(request: Request, token: str = ""):
         "request":      request,
         "token":        tok,
         "observer_key": get_or_create_observer_key(),
+        "time_limit":   get_setting("phase_time_min", 6),
         "teams":        TEAMS,
         "phases":       PHASES,
         "presets":      PRESETS,
@@ -1650,6 +1659,7 @@ async def api_phase_state(token: str):
         "submitted_count": len(submitted),
         "total_members": len(participants),
         "elapsed": elapsed,
+        "time_limit_min": get_setting("phase_time_min", 6),
         "active_started": bool(s.get("phase_started_at")),
         "my_submitted": token in tp.get("individual", {}),
         "my_answers": tp.get("individual", {}).get(token, []),
@@ -1945,24 +1955,16 @@ def _validate_scenario(phases):
                 return False, f"Faza {i+1}, {team}: moraju biti tačno 3 pitanja."
     return True, ""
 
-@app.post("/api/mod/scenario")
-async def api_update_scenario(body: dict):
-    global PHASES
-    token = str(body.get("token", "")).strip().upper()
-    require_mod(token)
-    phases = body.get("phases")
-    reset_sessions = bool(body.get("reset_sessions", False))
-    if not phases:
-        return JSONResponse({"ok": False, "error": "Nedostaje 'phases' polje."})
+def _apply_scenario(token: str, phases, reset_sessions: bool):
+    """Validate and activate a scenario. Returns (ok, error_message)."""
     ok, err = _validate_scenario(phases)
     if not ok:
-        return JSONResponse({"ok": False, "error": err})
-    # Check if mid-exercise and not resetting
+        return False, err
     if not reset_sessions and STATE["sessions"]:
         max_phase = max((s.get("phase", 0) for s in STATE["sessions"].values()), default=0)
         if max_phase >= len(phases):
-            return JSONResponse({"ok": False,
-                "error": f"Tim je na fazi {max_phase+1} a novi scenario ima samo {len(phases)} faza. Resetuj sesije ili dodaj faze."})
+            return False, (f"Tim je na fazi {max_phase+1} a novi scenario ima samo "
+                           f"{len(phases)} faza. Resetuj sesije ili dodaj faze.")
     with STATE_LOCK:
         PHASES.clear()
         PHASES.extend(phases)
@@ -1970,11 +1972,157 @@ async def api_update_scenario(body: dict):
             for k in ["sessions", "tokens", "events", "injects", "responses",
                       "media_feed", "team_phases", "phase_locks", "team_leaders"]:
                 STATE[k].clear() if isinstance(STATE[k], (dict, list)) else None
-            STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator"}
+            STATE["tokens"][token] = {"mode": "moderator", "name": "Moderator",
+                                      "created_at": time.time()}
     log_event("SCENARIO_UPDATE", token, "", "Moderator",
               f"{len(phases)} faza, reset={reset_sessions}")
     db_save()
-    return JSONResponse({"ok": True, "phases": len(phases), "reset": reset_sessions})
+    return True, ""
+
+@app.post("/api/mod/scenario")
+async def api_update_scenario(body: dict):
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    phases = body.get("phases")
+    reset_sessions = bool(body.get("reset_sessions", False))
+    if not phases:
+        return JSONResponse({"ok": False, "error": "Nedostaje 'phases' polje."})
+    ok, err = _apply_scenario(token, phases, reset_sessions)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err})
+    return JSONResponse({"ok": True, "phases": len(PHASES), "reset": reset_sessions})
+
+# ─── SCENARIO LIBRARY ─────────────────────────────────────────────────────────
+
+def _clean_scenario_name(name) -> str:
+    n = str(name or "").strip()[:60]
+    return n
+
+@app.post("/api/mod/set_timer")
+async def api_set_timer(body: dict):
+    """Exercise-wide soft time limit per phase, in minutes. 0 disables the countdown.
+
+    Soft by design: expiry pressures the team visually and is logged, but never
+    locks submission — a tabletop must not dead-end because a team ran late.
+    """
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    try:
+        minutes = int(body.get("minutes", 6))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Nevalidan broj minuta."})
+    minutes = max(0, min(minutes, 120))
+    with STATE_LOCK:
+        STATE.setdefault("settings", {})["phase_time_min"] = minutes
+    log_event("TIMER_SET", token, "", "Moderator", f"{minutes} min" if minutes else "isključen")
+    db_save()
+    return JSONResponse({"ok": True, "minutes": minutes})
+
+@app.get("/api/mod/scenario_library")
+async def api_scenario_library(token: str):
+    require_mod(token)
+    with _db() as c:
+        rows = c.execute("SELECT name, phases, updated FROM scenarios ORDER BY updated DESC").fetchall()
+    items = [{"name": r["name"], "phases": r["phases"],
+              "updated": datetime.fromtimestamp(r["updated"]).strftime("%d.%m.%Y %H:%M")} for r in rows]
+    return JSONResponse({"ok": True, "scenarios": items})
+
+@app.post("/api/mod/scenario_save")
+async def api_scenario_save(body: dict):
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    name = _clean_scenario_name(body.get("name"))
+    if not name:
+        return JSONResponse({"ok": False, "error": "Unesite naziv scenarija."})
+    # Save either the provided JSON or the currently active scenario.
+    phases = body.get("phases") or PHASES
+    ok, err = _validate_scenario(phases)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err})
+    with _db() as c:
+        c.execute("INSERT OR REPLACE INTO scenarios VALUES(?,?,?,?)",
+                  (name, json.dumps(phases, ensure_ascii=False), len(phases), time.time()))
+        c.commit()
+    log_event("SCENARIO_SAVE", token, "", "Moderator", name)
+    return JSONResponse({"ok": True, "name": name, "phases": len(phases)})
+
+@app.post("/api/mod/scenario_load")
+async def api_scenario_load(body: dict):
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    name = _clean_scenario_name(body.get("name"))
+    reset_sessions = bool(body.get("reset_sessions", False))
+    with _db() as c:
+        row = c.execute("SELECT value FROM scenarios WHERE name=?", (name,)).fetchone()
+    if not row:
+        return JSONResponse({"ok": False, "error": f"Scenario '{name}' nije pronađen."})
+    try:
+        phases = json.loads(row["value"])
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Sačuvani scenario je oštećen."})
+    ok, err = _apply_scenario(token, phases, reset_sessions)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err})
+    log_event("SCENARIO_LOAD", token, "", "Moderator", name)
+    return JSONResponse({"ok": True, "name": name, "phases": len(PHASES), "reset": reset_sessions})
+
+@app.post("/api/mod/scenario_delete")
+async def api_scenario_delete(body: dict):
+    token = str(body.get("token", "")).strip().upper()
+    require_mod(token)
+    name = _clean_scenario_name(body.get("name"))
+    with _db() as c:
+        cur = c.execute("DELETE FROM scenarios WHERE name=?", (name,))
+        c.commit()
+        deleted = cur.rowcount
+    if deleted:
+        log_event("SCENARIO_DELETE", token, "", "Moderator", name)
+    return JSONResponse({"ok": bool(deleted),
+                         "error": None if deleted else f"Scenario '{name}' nije pronađen."})
+
+# ─── PARTICIPANT DEBRIEF ──────────────────────────────────────────────────────
+
+@app.get("/api/debrief")
+async def api_participant_debrief(request: Request, token: str = ""):
+    """Final-screen summary for a participant: own team per-phase results + ranking.
+
+    Exposes only aggregate scores of other teams (no answers), so it is safe to
+    serve as soon as the requesting team has finished the last phase.
+    """
+    tok = (token or request.cookies.get(COOKIE_STUDENT, "") or "").strip().upper()
+    s = get_session(tok)
+    if not s:
+        return JSONResponse({"ok": False, "error": "Sesija nije aktivna."})
+    team = s["team"]
+    last_key = tp_key(team, len(PHASES) - 1)
+    if STATE["team_phases"].get(last_key, {}).get("status") != "done":
+        return JSONResponse({"ok": False, "error": "Vežba još nije završena za vaš tim."})
+
+    per_phase = []
+    for i, p in enumerate(PHASES):
+        tp = STATE["team_phases"].get(tp_key(team, i), {})
+        done = tp.get("status") == "done"
+        payload = get_consensus_payload(team, i, tp) if done else {"gained": 0, "max": 0, "results": []}
+        ok_cnt = sum(1 for r in payload.get("results", []) if r.get("ok"))
+        per_phase.append({
+            "phase": i + 1, "title": p.get("title", f"Faza {i+1}"), "done": done,
+            "gained": payload.get("gained", 0), "max": payload.get("max", 0),
+            "correct": ok_cnt, "total_q": len(payload.get("results", [])),
+        })
+
+    ranking = {}
+    for ss in STATE["sessions"].values():
+        t = ss["team"]
+        ranking.setdefault(t, {"team": t, "icon": ROLE_CARDS.get(t, {}).get("icon", ""), "score": 0})
+        ranking[t]["score"] += ss["score"]
+    board = sorted(ranking.values(), key=lambda x: -x["score"])
+    for pos, row in enumerate(board, 1):
+        row["rank"] = pos
+        row["is_mine"] = row["team"] == team
+
+    return JSONResponse({"ok": True, "team": team, "per_phase": per_phase,
+                         "ranking": board, "total": sum(x["gained"] for x in per_phase),
+                         "total_max": sum(x["max"] for x in per_phase)})
 
 # ─── DEBRIEFING TIMELINE ──────────────────────────────────────────────────────
 

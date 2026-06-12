@@ -62,5 +62,12 @@ blackgrid/
 > - Rate limit za login čita `X-Forwarded-For` (realan IP klijenta iza Azure front-enda).
 > - PDF izveštaj koristi bundlovan DejaVu font (`static/fonts/`) — podržava srpsku latinicu i ćirilicu.
 > - Izmene scenarija kroz moderatorski editor se čuvaju u SQLite i preživljavaju restart.
+
+## Funkcionalnosti (v3)
+
+- **Tajmer faze** — moderator na Dashboard-u postavlja soft limit u minutima (0 = isključen); važi odmah za sve timove, ne blokira predaju.
+- **Inject „Odgovori"** — dugme na svakoj moderatorskoj poruci popunjava ID i fokusira polje za odgovor.
+- **Debrief ekran** — po završetku poslednje faze učesnici vide skor po fazama, ukupnu tačnost i konačan plasman svih timova.
+- **Biblioteka scenarija** — tab Scenario: čuvanje aktivnog scenarija pod nazivom, aktiviranje (sa ili bez reseta) i brisanje; čuva se u SQLite (`scenarios` tabela).
 3. Moderator pokreće injecte i prati timove u realnom vremenu
 4. Po završetku konsenzusa → moderator klikne "Otključaj" za sledeću fazu
