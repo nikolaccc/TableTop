@@ -250,16 +250,17 @@
 {% block scripts %}
 <script>
 const MOD_TOKEN = '{{ token }}';
+const OBS_KEY = '{{ observer_key }}';
 const PRESETS_DATA = {{ presets_json|safe }};
 const PHASE_COUNT = {{ phases|length }};
 
 // Observer URL
 window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('observerUrl').textContent =
-    window.location.origin + '/observe?key=' + encodeURIComponent(MOD_TOKEN);
+    window.location.origin + '/observe?key=' + encodeURIComponent(OBS_KEY);
 });
 function copyObserver() {
-  navigator.clipboard.writeText(window.location.origin + '/observe?key=' + encodeURIComponent(MOD_TOKEN))
+  navigator.clipboard.writeText(window.location.origin + '/observe?key=' + encodeURIComponent(OBS_KEY))
     .then(() => toast('Link kopiran!','success'));
 }
 
@@ -487,7 +488,7 @@ async function loadEvents(){
 
 // Export
 function exportPdf(){
-  const a=document.createElement('a');a.href=`/api/mod/export_pdf?token=${MOD_TOKEN}`;a.click();
+  const a=document.createElement('a');a.href='/api/mod/export_pdf';a.click(); // auth preko HttpOnly cookie-ja
 }
 async function exportJson(){
   const r=await fetch(`/api/mod/export_json?token=${MOD_TOKEN}`);

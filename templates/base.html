@@ -649,6 +649,17 @@ tr:hover td { background: rgba(255,255,255,.02); }
 <script>
 // ── SHARED UTILITIES ──────────────────────────────────────────────────────────
 // HTML-escape for any dynamic string interpolated into innerHTML / attributes.
+// Clean ?token= from the address bar — auth continues via HttpOnly cookie.
+(function() {
+  try {
+    if (window.location.search.includes('token=')) {
+      const u = new URL(window.location.href);
+      u.searchParams.delete('token');
+      window.history.replaceState(null, '', u.toString());
+    }
+  } catch(e) {}
+})();
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')

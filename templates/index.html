@@ -229,10 +229,11 @@ document.addEventListener('keydown', e => {
 // Check if already logged in
 const storedToken = localStorage.getItem('bg_token');
 if (storedToken) {
-  fetch(`/api/phase_state?token=${storedToken}`)
+  // /api/rejoin postavlja HttpOnly cookie pa token ne ide kroz URL
+  fetch('/api/rejoin', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({token: storedToken})})
     .then(r=>r.json())
     .then(d => {
-      if(d.ok) window.location.href=`/play?token=${storedToken}`;
+      if(d.ok) window.location.href = d.redirect || '/play';
       else localStorage.removeItem('bg_token');
     })
     .catch(()=>{ localStorage.removeItem('bg_token'); });
