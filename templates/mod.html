@@ -181,6 +181,13 @@
 
     <!-- DEBRIEFING -->
     <div class="tab-panel" id="tabDebrief">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px;">
+        <div class="kicker">📈 Analitika po pitanju (individualni odgovori svih učesnika)</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadQuestionStats()">↻ Osveži analitiku</button>
+      </div>
+      <div class="alert alert-info mb-12">Pitanja sa <strong>&lt;50% tačnih</strong> su istaknuta crveno — to su koncepti koje treba ponovo obraditi na predavanju. Ista analiza ulazi u PDF izveštaj (sekcija 4).</div>
+      <div id="qStatsList" class="mb-24"><div class="text-dim text-sm">Kliknite „Osveži analitiku".</div></div>
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,.08);margin:8px 0 16px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
         <div class="kicker">After-Action Report</div>
         <div style="display:flex;gap:8px;">
@@ -450,6 +457,41 @@ async function loadDebrief() {
   el.innerHTML=html;
 }
 
+// Analitika po pitanju
+async function loadQuestionStats(){
+  const el=document.getElementById('qStatsList');
+  el.innerHTML='<div class="text-dim text-sm">Učitavanje…</div>';
+  const r=await api(`/api/mod/question_stats?token=${MOD_TOKEN}`,null,'GET');
+  if(!r||!r.ok){el.innerHTML='<div class="text-dim text-sm">Greška učitavanja analitike.</div>';return;}
+  let any=false, html='';
+  r.phases.forEach(ph=>{
+    const qs=ph.questions.filter(q=>q.individual_n>0);
+    if(!qs.length)return;
+    any=true;
+    html+=`<div class="kicker mb-8 mt-12">Faza ${ph.phase}: ${esc(ph.title)}</div>`;
+    qs.forEach(q=>{
+      const pct=q.individual_pct??0;
+      const color=pct>=75?'var(--green,#22c55e)':pct>=50?'var(--blue)':'var(--red,#dc2626)';
+      html+=`
+        <div class="card-inset mb-8" style="${pct<50?'border:1px solid rgba(220,38,38,.4);':''}">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:220px;">
+              <div class="text-xs text-dim">${esc(q.scope)} · konsenzusi: ${q.consensus_ok}/${q.consensus_n} tačno</div>
+              <div style="font-size:13px;color:#fff;">${esc(q.question)}</div>
+            </div>
+            <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${color};min-width:64px;text-align:right;">${pct}%</div>
+          </div>
+          <div style="height:6px;border-radius:3px;background:rgba(255,255,255,.07);margin-top:8px;overflow:hidden;">
+            <div style="height:100%;width:${pct}%;background:${color};"></div>
+          </div>
+          <div class="text-xs text-dim mt-4">${q.individual_ok}/${q.individual_n} individualnih tačno · tačan odgovor: <span style="color:var(--green,#22c55e);">${esc((q.correct||'').substring(0,90))}</span></div>
+          ${q.top_wrong&&pct<100?`<div class="text-xs mt-4" style="color:#f87171;">⚠ najčešća greška (${q.top_wrong.count}x): ${esc(String(q.top_wrong.text).substring(0,90))}</div>`:''}
+        </div>`;
+    });
+  });
+  el.innerHTML=any?html:'<div class="card-inset text-dim text-sm">Još nema predatih odgovora — analitika se puni kako timovi rade.</div>';
+}
+
 // Tajmer faze
 async function setPhaseTimer(){
   const el=document.getElementById('phaseTimerMin');
@@ -596,10 +638,20 @@ async function logoutNow(){
 }
 
 loadDash();
+// Live push: dogadjaji osvezavaju dashboard momentalno; interval ostaje kao fallback.
+(function(){
+  if (!window.EventSource) return;
+  try {
+    const es = new EventSource(`/api/events_stream?token=${MOD_TOKEN}`);
+    ['login','progress','consensus','unlock','scenario'].forEach(t=>es.addEventListener(t,()=>loadDash()));
+    es.addEventListener('response', ()=>{ loadDash(); if (typeof loadRespLog==='function') loadRespLog(); });
+  } catch(e) { console.warn('SSE nedostupan, ostaje polling.', e); }
+})();
 setInterval(loadDash,8000);
 loadScenarioLibrary();
 document.querySelectorAll('.tab-btn').forEach(b=>b.addEventListener('click',()=>{
   if(b.dataset.tab==='tabScenario') loadScenarioLibrary();
+  if(b.dataset.tab==='tabDebrief') loadQuestionStats();
 }));
 window.addEventListener('DOMContentLoaded',()=>{
   loadPreset('{{ presets.keys()|list|first }}',document.querySelector('.preset-pill'));

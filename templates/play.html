@@ -830,6 +830,24 @@ async function loadInjects() {
     </div>`).join('');
 }
 
+// ── LIVE PUSH (SSE) ───────────────────────────────────────────────────────────
+// Pushes refresh triggers with ~1s latency; polling below remains the fallback.
+function initSSE() {
+  if (!window.EventSource) return;
+  try {
+    const es = new EventSource(`/api/events_stream?token=${TOKEN}`);
+    es.addEventListener('inject',    () => loadInjects());
+    es.addEventListener('media',     () => loadMedia());
+    es.addEventListener('unlock',    () => doPoll());
+    es.addEventListener('consensus', () => doPoll());
+    es.addEventListener('progress',  () => doPoll());
+    es.addEventListener('timer',     () => doPoll());
+    es.addEventListener('scenario',  () => setTimeout(()=>window.location.reload(), 800));
+    // EventSource se sam rekonektuje na pad; nista dodatno nije potrebno.
+  } catch(e) { console.warn('SSE nedostupan, ostaje polling.', e); }
+}
+initSSE();
+
 // ── DEBRIEF ───────────────────────────────────────────────────────────────────
 let debriefLoaded = false;
 async function loadDebrief() {
