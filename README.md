@@ -53,7 +53,14 @@ blackgrid/
 
 ## Flow vežbe
 
-1. Moderator se prijavi → `/mod?token=BG-XXXXXXXX`
-2. Učesnici se prijave sa kodom vežbe → `/play?token=BG-XXXXXXXX`
+1. Moderator se prijavi → `/mod` (autentikacija preko HttpOnly cookie-ja; token se više ne pojavljuje u URL-u)
+2. Učesnici se prijave sa kodom vežbe → `/play` (cookie). Legacy linkovi `?token=BG-XXXXXXXX` i dalje rade — token se odmah uklanja iz adresne trake.
+
+> **Napomene o bezbednosti i radu (v2):**
+> - Aplikacija **mora** raditi sa tačno **1 workerom** (`startup.sh`) — sav state je u memoriji procesa; više workera dovodi do gubitka odgovora.
+> - Observer link koristi **odvojeni observer ključ** (ne moderatorski token) — bezbedno za deljenje publici/projektoru.
+> - Rate limit za login čita `X-Forwarded-For` (realan IP klijenta iza Azure front-enda).
+> - PDF izveštaj koristi bundlovan DejaVu font (`static/fonts/`) — podržava srpsku latinicu i ćirilicu.
+> - Izmene scenarija kroz moderatorski editor se čuvaju u SQLite i preživljavaju restart.
 3. Moderator pokreće injecte i prati timove u realnom vremenu
 4. Po završetku konsenzusa → moderator klikne "Otključaj" za sledeću fazu

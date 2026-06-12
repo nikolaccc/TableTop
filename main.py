@@ -3,13 +3,14 @@ Operation Black Grid — FastAPI edition
 Single-file backend ready for Azure App Service.
 """
 
-import os, json, time, uuid, hashlib, threading, sqlite3, atexit, random
+import os, json, time, uuid, hashlib, hmac, threading, sqlite3, atexit, random
 from datetime import datetime
 from functools import wraps
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -45,25 +46,54 @@ def _sha_code(v: str) -> str:
 
 def check_participant(code: str) -> bool:
     c = _norm_code(code)
-    if _PARTICIPANT_HASH and _sha_code(c) == _PARTICIPANT_HASH:
+    if _PARTICIPANT_HASH and hmac.compare_digest(_sha_code(c), _PARTICIPANT_HASH):
         return True
-    if _PARTICIPANT_CODE and c == _norm_code(_PARTICIPANT_CODE):
+    if _PARTICIPANT_CODE and hmac.compare_digest(c, _norm_code(_PARTICIPANT_CODE)):
         return True
     return False
 
 def check_mod(pw: str) -> bool:
     # Moderator password remains case-sensitive.
-    if _MOD_HASH and _sha(pw) == _MOD_HASH:
+    if _MOD_HASH and hmac.compare_digest(_sha(pw), _MOD_HASH):
         return True
-    if _MOD_PASSWORD and str(pw) == _MOD_PASSWORD:
+    if _MOD_PASSWORD and hmac.compare_digest(str(pw), _MOD_PASSWORD):
         return True
     return False
+
+# ─── AUTH COOKIES ─────────────────────────────────────────────────────────────
+# Tokens are delivered via HttpOnly cookies so they never appear in the address
+# bar, browser history, screenshots/projector or Referer headers. Separate
+# cookies for participant and moderator allow both roles in one browser.
+COOKIE_STUDENT = "bg_token"
+COOKIE_MOD     = "bg_mod_token"
+MOD_TOKEN_TTL  = 12 * 3600
+
+def set_auth_cookie(resp, name: str, token: str, max_age: int):
+    resp.set_cookie(name, token, max_age=max_age, httponly=True,
+                    samesite="lax", path="/")
+    return resp
 
 # ─── RATE LIMITER ─────────────────────────────────────────────────────────────
 _RATE: dict = {}
 _RATE_MAX  = int(os.environ.get("BLACKGRID_RATE_MAX", "30"))
 _RATE_WIN  = 60
 _RATE_LOCK = threading.Lock()
+
+def client_ip(req: Request) -> str:
+    """Real client IP behind the Azure App Service front-end.
+
+    req.client.host is the proxy there, which would turn the per-IP login limit
+    into a GLOBAL one — mass login at exercise start would lock participants out.
+    """
+    xff = req.headers.get("x-forwarded-for", "")
+    if xff:
+        ip = xff.split(",")[0].strip()
+        # Azure appends :port to IPv4 entries.
+        if ip.count(":") == 1 and "." in ip:
+            ip = ip.split(":")[0]
+        if ip:
+            return ip
+    return req.client.host if req.client else "unknown"
 
 def rate_ok(ip: str) -> bool:
     if _RATE_MAX <= 0:
@@ -77,6 +107,17 @@ def rate_ok(ip: str) -> bool:
         ts.append(now)
         _RATE[ip] = ts
         return True
+
+def rate_prune():
+    """Drop stale per-IP entries so _RATE doesn't grow unbounded."""
+    now = time.time()
+    with _RATE_LOCK:
+        for ip in list(_RATE):
+            ts = [t for t in _RATE[ip] if now - t < _RATE_WIN]
+            if ts:
+                _RATE[ip] = ts
+            else:
+                _RATE.pop(ip, None)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PERSISTENCE — SQLite
@@ -1145,46 +1186,40 @@ def trim_state():
                         tp.get("individual", {}).pop(t, None)
         if len(STATE["media_feed"]) > 200:
             STATE["media_feed"] = STATE["media_feed"][-200:]
+        # Moderator tokens have no session entry — expire them after MOD_TOKEN_TTL
+        # so they don't accumulate forever in the persisted snapshot.
+        for t, meta in list(STATE["tokens"].items()):
+            if meta.get("mode") in ("moderator", "observer") and now - meta.get("created_at", now) > MOD_TOKEN_TTL:
+                STATE["tokens"].pop(t, None)
+    rate_prune()
 
-# WebSocket connections for live push
-class WSManager:
-    def __init__(self):
-        self.active: dict[str, WebSocket] = {}
-
-    async def connect(self, token: str, ws: WebSocket):
-        await ws.accept()
-        self.active[token] = ws
-
-    def disconnect(self, token: str):
-        self.active.pop(token, None)
-
-    async def broadcast_mod(self):
-        dead = []
-        for tok, ws in list(self.active.items()):
-            meta = STATE["tokens"].get(tok, {})
-            if meta.get("mode") == "moderator":
-                try:
-                    await ws.send_json({"type": "mod_refresh"})
-                except:
-                    dead.append(tok)
-        for d in dead:
-            self.disconnect(d)
-
-    async def push_to(self, token: str, data: dict):
-        ws = self.active.get(token)
-        if ws:
-            try:
-                await ws.send_json(data)
-            except:
-                self.disconnect(token)
-
-ws_manager = WSManager()
+# NOTE: a WebSocket push layer existed here but was never wired to the frontend
+# (all clients poll). Removed as dead code to shrink the attack surface; if live
+# push is reintroduced, hook broadcasts into CONSENSUS_SUBMIT / MOD_INJECT / MOD_UNLOCK.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  FASTAPI APP
 # ═══════════════════════════════════════════════════════════════════════════════
 
-app = FastAPI(title="Operation Black Grid")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(_app):
+    db_init()
+    db_load()
+    atexit.register(db_save)
+
+    def _periodic():
+        while True:
+            time.sleep(30)
+            trim_state()
+            db_save()
+    threading.Thread(target=_periodic, daemon=True).start()
+    print(f"[BLACKGRID] FastAPI started. PID={os.getpid()} DB={DB_PATH}")
+    yield
+    db_save()
+
+app = FastAPI(title="Operation Black Grid", lifespan=lifespan)
 
 # Resolve paths relative to this file — works both locally and in Azure /tmp/... paths
 _BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
@@ -1197,20 +1232,6 @@ os.makedirs(_STATIC_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
-# ─── STARTUP ──────────────────────────────────────────────────────────────────
-@app.on_event("startup")
-async def startup():
-    db_init()
-    db_load()
-    atexit.register(db_save)
-
-    def _periodic():
-        while True:
-            time.sleep(30)
-            trim_state()
-            db_save()
-    threading.Thread(target=_periodic, daemon=True).start()
-    print(f"[BLACKGRID] FastAPI started. PID={os.getpid()} DB={DB_PATH}")
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -1329,7 +1350,9 @@ async def index(request: Request):
 
 @app.get("/play", response_class=HTMLResponse)
 async def play(request: Request, token: str = ""):
-    s = get_session(token)
+    # Token can arrive via legacy ?token= link or (preferred) HttpOnly cookie.
+    tok = (token or request.cookies.get(COOKIE_STUDENT, "") or "").strip().upper()
+    s = get_session(tok)
     if not s:
         return RedirectResponse("/")
     phase_idx = s.get("phase", 0)
@@ -1337,9 +1360,9 @@ async def play(request: Request, token: str = ""):
     phase     = PHASES[phase_idx] if phase_idx < len(PHASES) else None
     tp        = STATE["team_phases"].get(tp_key(s["team"], phase_idx), {})
     leader = get_team_leader(s["team"])
-    return templates.TemplateResponse("play.html", {
+    resp = templates.TemplateResponse("play.html", {
         "request":     request,
-        "token":       token.upper(),
+        "token":       tok,
         "session":     s,
         "phase":       phase,
         "phase_idx":   phase_idx,
@@ -1347,24 +1370,29 @@ async def play(request: Request, token: str = ""):
         "unlocked":    unlocked,
         "tp":          tp,
         "role":        ROLE_CARDS.get(s["team"], {}),
-        "is_leader":   is_team_leader(s["team"], token),
+        "is_leader":   is_team_leader(s["team"], tok),
         "leader_name": leader.get("name", "") if leader else "",
         "phases_json": json.dumps(PHASES, ensure_ascii=False),
     })
+    # Refresh cookie so a legacy ?token= visit keeps working after the URL is cleaned.
+    return set_auth_cookie(resp, COOKIE_STUDENT, tok, SESSION_TTL)
 
 @app.get("/mod", response_class=HTMLResponse)
 async def mod_panel(request: Request, token: str = ""):
-    meta = get_token_meta(token)
+    tok = (token or request.cookies.get(COOKIE_MOD, "") or "").strip().upper()
+    meta = get_token_meta(tok)
     if not meta or meta.get("mode") != "moderator":
         return RedirectResponse("/")
-    return templates.TemplateResponse("mod.html", {
+    resp = templates.TemplateResponse("mod.html", {
         "request":      request,
-        "token":        token.upper(),
+        "token":        tok,
+        "observer_key": get_or_create_observer_key(),
         "teams":        TEAMS,
         "phases":       PHASES,
         "presets":      PRESETS,
         "presets_json": json.dumps(PRESETS, ensure_ascii=False),
     })
+    return set_auth_cookie(resp, COOKIE_MOD, tok, MOD_TOKEN_TTL)
 
 # ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -1390,7 +1418,7 @@ async def api_team_leader_status(team: str = ""):
 
 @app.post("/api/login")
 async def api_login(req: Request, body: LoginRequest):
-    ip = req.client.host if req.client else "unknown"
+    ip = client_ip(req)
     if not rate_ok(ip):
         return JSONResponse({"ok": False, "error": "Previše pokušaja. Sačekajte 60 sekundi."}, 429)
 
@@ -1399,10 +1427,12 @@ async def api_login(req: Request, body: LoginRequest):
             return JSONResponse({"ok": False, "error": "Pogrešna moderator lozinka."})
         token = make_token()
         with STATE_LOCK:
-            STATE["tokens"][token] = {"mode": "moderator", "name": body.name or "Moderator"}
+            STATE["tokens"][token] = {"mode": "moderator", "name": body.name or "Moderator",
+                                      "created_at": time.time()}
         log_event("MOD_LOGIN", token, "Moderator", body.name or "Moderator")
         db_save()
-        return JSONResponse({"ok": True, "token": token, "mode": "moderator", "redirect": f"/mod?token={token}"})
+        resp = JSONResponse({"ok": True, "token": token, "mode": "moderator", "redirect": "/mod"})
+        return set_auth_cookie(resp, COOKIE_MOD, token, MOD_TOKEN_TTL)
 
     # Participant
     if not body.name or not body.team or body.team not in TEAMS:
@@ -1433,7 +1463,8 @@ async def api_login(req: Request, body: LoginRequest):
         }
     log_event("STUDENT_LOGIN", token, body.team, body.name, "Šef tima" if became_leader else "Član tima")
     db_save()
-    return JSONResponse({"ok": True, "token": token, "mode": "student", "is_leader": became_leader, "redirect": f"/play?token={token}"})
+    resp = JSONResponse({"ok": True, "token": token, "mode": "student", "is_leader": became_leader, "redirect": "/play"})
+    return set_auth_cookie(resp, COOKIE_STUDENT, token, SESSION_TTL)
 
 @app.post("/api/rejoin")
 async def api_rejoin(body: dict):
@@ -1442,18 +1473,23 @@ async def api_rejoin(body: dict):
     if not s:
         return JSONResponse({"ok": False, "error": "Token nije pronađen ili je sesija istekla."})
     log_event("REJOIN", token, s["team"], s["name"])
-    return JSONResponse({"ok": True, "token": token, "redirect": f"/play?token={token}"})
+    resp = JSONResponse({"ok": True, "token": token, "redirect": "/play"})
+    return set_auth_cookie(resp, COOKIE_STUDENT, token, SESSION_TTL)
 
 @app.post("/api/logout")
 async def api_logout(body: dict):
     token = str(body.get("token", "")).strip().upper()
     release_session(token, "LOGOUT")
-    return JSONResponse({"ok": True, "redirect": "/"})
+    resp = JSONResponse({"ok": True, "redirect": "/"})
+    resp.delete_cookie(COOKIE_STUDENT, path="/")
+    return resp
 
 @app.get("/logout")
 async def logout(token: str = ""):
     release_session(token, "LOGOUT")
-    return RedirectResponse("/")
+    resp = RedirectResponse("/")
+    resp.delete_cookie(COOKIE_STUDENT, path="/")
+    return resp
 
 # ─── PARTICIPANT APIs ──────────────────────────────────────────────────────────
 
@@ -1988,13 +2024,23 @@ async def api_debrief(token: str):
 # ─── PDF EXPORT ───────────────────────────────────────────────────────────────
 
 @app.get("/api/mod/export_pdf")
-async def api_export_pdf(token: str):
-    require_mod(token)
+async def api_export_pdf(request: Request, token: str = ""):
+    tok = (token or request.cookies.get(COOKIE_MOD, "") or "").strip().upper()
+    require_mod(tok)
     if not PDF_OK:
         return JSONResponse({"ok": False, "error": "fpdf2 nije instaliran na serveru."})
     path = _generate_pdf()
+    # BackgroundTask removes the temp file after the response is sent — /tmp
+    # on App Service is limited and these files used to accumulate forever.
     return FileResponse(path, media_type="application/pdf",
-                        filename=f"blackgrid_aar_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf")
+                        filename=f"blackgrid_aar_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                        background=BackgroundTask(_safe_remove, path))
+
+def _safe_remove(path: str):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 def _ascii(s):
     repl = {"č":"c","ć":"c","š":"s","ž":"z","đ":"dj","Č":"C","Ć":"C","Š":"S","Ž":"Z","Đ":"Dj",
@@ -2007,30 +2053,41 @@ def _generate_pdf():
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
 
+    # Bundled DejaVu renders Serbian Latin AND Cyrillic correctly; without it
+    # the report transliterates diacritics and replaces Cyrillic with "?".
+    font_reg  = os.path.join(_STATIC_DIR, "fonts", "DejaVuSans.ttf")
+    font_bold = os.path.join(_STATIC_DIR, "fonts", "DejaVuSans-Bold.ttf")
+    if os.path.isfile(font_reg):
+        pdf.add_font("AppFont", "", font_reg)
+        pdf.add_font("AppFont", "B", font_bold if os.path.isfile(font_bold) else font_reg)
+        FAM, T = "AppFont", (lambda s: str(s))
+    else:
+        FAM, T = "Helvetica", _ascii
+
     def hdr(txt, color=(30, 30, 80)):
         pdf.ln(4)
         pdf.set_fill_color(*color)
         pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.cell(0, 8, _ascii(f"  {txt}"), ln=True, fill=True)
+        pdf.set_font(FAM, "B", 12)
+        pdf.cell(0, 8, T(f"  {txt}"), ln=True, fill=True)
         pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
 
     def sub(txt):
-        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_font(FAM, "B", 10)
         pdf.set_text_color(60, 60, 60)
-        pdf.cell(0, 6, _ascii(txt), ln=True)
+        pdf.cell(0, 6, T(txt), ln=True)
         pdf.set_text_color(0, 0, 0)
 
     def txt(t, size=9):
-        pdf.set_font("Helvetica", "", size)
-        pdf.multi_cell(0, 5, _ascii(t), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font(FAM, "", size)
+        pdf.multi_cell(0, 5, T(t), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     def kv(k, v):
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.cell(55, 5, _ascii(k))
-        pdf.set_font("Helvetica", "", 9)
-        pdf.cell(0, 5, _ascii(str(v)), ln=True)
+        pdf.set_font(FAM, "B", 9)
+        pdf.cell(55, 5, T(k))
+        pdf.set_font(FAM, "", 9)
+        pdf.cell(0, 5, T(str(v)), ln=True)
 
     # Cover
     pdf.add_page()
@@ -2038,15 +2095,15 @@ def _generate_pdf():
     pdf.rect(0, 0, 210, 297, "F")
     pdf.set_text_color(255, 255, 255)
     pdf.ln(60)
-    pdf.set_font("Helvetica", "B", 30)
+    pdf.set_font(FAM, "B", 30)
     pdf.cell(0, 12, "OPERATION", ln=True, align="C")
     pdf.set_text_color(220, 38, 38)
     pdf.cell(0, 12, "BLACK GRID", ln=True, align="C")
     pdf.ln(6)
     pdf.set_text_color(180, 190, 210)
-    pdf.set_font("Helvetica", "", 10)
+    pdf.set_font(FAM, "", 10)
     pdf.cell(0, 6, "After-Action Report", ln=True, align="C")
-    pdf.cell(0, 6, _ascii(f"Generisano: {datetime.now().strftime('%d.%m.%Y %H:%M')}"), ln=True, align="C")
+    pdf.cell(0, 6, T(f"Generisano: {datetime.now().strftime('%d.%m.%Y %H:%M')}"), ln=True, align="C")
 
     # Summary
     pdf.add_page()
@@ -2105,11 +2162,11 @@ def _generate_pdf():
     pdf.add_page()
     hdr("4. HRONOLOGIJA DOGADJAJA")
     for e in STATE["events"][-80:]:
-        pdf.set_font("Helvetica", "", 8)
+        pdf.set_font(FAM, "", 8)
         line = f"[{e['time']}] {e['kind']} | {e.get('team','')} | {e.get('name','')} | {e.get('details','')}"
         # new_x/new_y: fpdf2 >= 2.5 leaves the cursor at end-of-line after multi_cell,
         # which made every 2nd line raise "Not enough horizontal space" and broke export.
-        pdf.multi_cell(0, 4, _ascii(line[:120]), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.multi_cell(0, 4, T(line[:120]), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     path = f"/tmp/blackgrid_aar_{uuid.uuid4().hex[:8]}.pdf"
     pdf.output(path)
@@ -2133,15 +2190,30 @@ async def api_export_json(token: str):
     return JSONResponse(payload)
 
 def observer_key_ok(key: str) -> bool:
-    """Allow observer links generated from an active moderator token, or the legacy mod password/hash key."""
+    """Valid keys: dedicated observer tokens, an active moderator token, or the mod password.
+
+    Observer links shared with an audience use a DEDICATED observer token — sharing
+    the moderator token itself would hand every observer full control of /mod.
+    """
     raw = (key or "").strip()
     k = raw.upper()
     if not k:
         return False
     meta = get_token_meta(k)
-    if meta and meta.get("mode") == "moderator":
+    if meta and meta.get("mode") in ("observer", "moderator"):
         return True
-    return bool(_MOD_HASH and (hashlib.sha256(raw.encode()).hexdigest() == _MOD_HASH or raw == _MOD_HASH))
+    return bool(_MOD_HASH and hmac.compare_digest(hashlib.sha256(raw.encode()).hexdigest(), _MOD_HASH))
+
+def get_or_create_observer_key() -> str:
+    """One shared observer key for the exercise; rotated via moderator Reset."""
+    with STATE_LOCK:
+        for t, meta in STATE["tokens"].items():
+            if meta.get("mode") == "observer":
+                meta["created_at"] = time.time()  # keep alive while mod panel is used
+                return t
+        t = make_token()
+        STATE["tokens"][t] = {"mode": "observer", "name": "Observer", "created_at": time.time()}
+        return t
 
 # ─── OBSERVER MODE ────────────────────────────────────────────────────────────
 
@@ -2189,22 +2261,3 @@ async def api_observe_dashboard(key: str):
     }
     return JSONResponse({"teams": teams_data, "stats": stats})
 
-# ─── WEBSOCKET ─────────────────────────────────────────────────────────────────
-
-@app.websocket("/ws/{token}")
-async def websocket_endpoint(websocket: WebSocket, token: str):
-    token = token.strip().upper()
-    meta  = get_token_meta(token)
-    if not meta:
-        await websocket.close(code=4001)
-        return
-    await ws_manager.connect(token, websocket)
-    try:
-        while True:
-            data = await websocket.receive_json()
-            if data.get("type") == "ping":
-                await websocket.send_json({"type": "pong"})
-    except WebSocketDisconnect:
-        ws_manager.disconnect(token)
-    except Exception:
-        ws_manager.disconnect(token)
