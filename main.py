@@ -3,13 +3,13 @@ Operation Black Grid — FastAPI edition
 Single-file backend ready for Azure App Service.
 """
 
-import os, json, time, uuid, hashlib, hmac, threading, sqlite3, atexit, random
+import os, json, time, uuid, hashlib, hmac, threading, sqlite3, atexit, random, asyncio
 from datetime import datetime
 from functools import wraps
 from typing import Optional
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -123,8 +123,32 @@ def rate_prune():
 #  PERSISTENCE — SQLite
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_DB_DIR  = "/home/data" if os.path.isdir("/home/data") else "/tmp"
-DB_PATH  = os.environ.get("BLACKGRID_DB", os.path.join(_DB_DIR, "blackgrid.db"))
+def _pick_db_path() -> str:
+    """Choose a database location that survives Azure restarts/redeploys.
+
+    On App Service only /home is persistent storage; everything else (including
+    /tmp) is wiped on restart — which would silently destroy the scenario
+    library and exercise history. We therefore create /home/data ourselves
+    instead of merely checking whether it already exists.
+    """
+    env = os.environ.get("BLACKGRID_DB")
+    if env:
+        try:
+            os.makedirs(os.path.dirname(env) or ".", exist_ok=True)
+        except OSError:
+            pass
+        return env
+    if os.path.isdir("/home") and os.access("/home", os.W_OK):
+        try:
+            os.makedirs("/home/data", exist_ok=True)
+            return os.path.join("/home/data", "blackgrid.db")
+        except OSError:
+            pass
+    print("[BLACKGRID][UPOZORENJE] Persistentni /home nije dostupan — baza ide u /tmp "
+          "i BIĆE IZGUBLJENA pri restartu. Postavite BLACKGRID_DB na trajnu putanju.")
+    return os.path.join("/tmp", "blackgrid.db")
+
+DB_PATH  = _pick_db_path()
 STATE_LOCK = threading.RLock()
 
 def _db():
@@ -1097,6 +1121,24 @@ STATE = {
 def get_setting(key, default=None):
     return STATE.get("settings", {}).get(key, default)
 
+# ─── LIVE PUSH (SSE) ──────────────────────────────────────────────────────────
+# Lightweight in-process notification log. SSE clients tail it and trigger the
+# matching refresh (loadInjects, doPoll...) — payload carries no content, only
+# the event type, so all authorization stays in the existing endpoints.
+NOTIFY_SEQ  = 0
+NOTIFY_LOG: list = []          # [{seq, type, team}]
+NOTIFY_MAX  = 300
+MOD_ONLY    = "__mod__"        # events visible only to moderator panels
+
+def notify(evt_type: str, team: str = ""):
+    """team="" → all clients; team=<name> → that team + mods; team=MOD_ONLY → mods."""
+    global NOTIFY_SEQ
+    with STATE_LOCK:
+        NOTIFY_SEQ += 1
+        NOTIFY_LOG.append({"seq": NOTIFY_SEQ, "type": str(evt_type), "team": team})
+        if len(NOTIFY_LOG) > NOTIFY_MAX:
+            del NOTIFY_LOG[:len(NOTIFY_LOG) - NOTIFY_MAX]
+
 SESSION_TTL = 6 * 3600
 
 def now_str():
@@ -1471,6 +1513,7 @@ async def api_login(req: Request, body: LoginRequest):
             "is_leader": became_leader,
         }
     log_event("STUDENT_LOGIN", token, body.team, body.name, "Šef tima" if became_leader else "Član tima")
+    notify("login", MOD_ONLY)
     db_save()
     resp = JSONResponse({"ok": True, "token": token, "mode": "student", "is_leader": became_leader, "redirect": "/play"})
     return set_auth_cookie(resp, COOKIE_STUDENT, token, SESSION_TTL)
@@ -1546,6 +1589,7 @@ async def api_submit_individual(body: dict):
         # Individual answer is intentionally idempotent: same member can correct before consensus.
         tp["individual"][token] = answers
     log_event("INDIVIDUAL_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1}")
+    notify("progress", s["team"])
     db_save()
     # Count active phase participants and return leader info so the frontend
     # can transition immediately in single-leader/single-member teams.
@@ -1631,6 +1675,7 @@ async def api_submit_consensus(body: dict):
                         "question": res["question"],
                     }
     log_event("CONSENSUS_SUBMIT", token, s["team"], s["name"], f"F{phase_idx+1} skor:{gained}")
+    notify("consensus", s["team"])
     db_save()
     return JSONResponse({"ok": True, "already_done": False, **payload})
 
@@ -1727,6 +1772,7 @@ async def api_respond_inject(body: dict):
             "team": s["team"], "name": s["name"], "text": text
         })
     log_event("INJECT_RESPONSE", token, s["team"], s["name"], f"{inject_id}: {text[:80]}")
+    notify("response", MOD_ONLY)
     db_save()
     return JSONResponse({"ok": True})
 
@@ -1821,6 +1867,7 @@ async def api_mod_unlock(body: dict):
     with STATE_LOCK:
         STATE["phase_locks"][team] = current + 1
     log_event("MOD_UNLOCK", token, team, "Moderator", f"Otključana F{current+2}")
+    notify("unlock", team)
     db_save()
     return JSONResponse({"ok": True, "unlocked": current + 1})
 
@@ -1837,6 +1884,7 @@ async def api_mod_unlock_all(body: dict):
         for team in TEAMS:
             STATE["phase_locks"][team] = phase_idx
     log_event("MOD_UNLOCK_ALL", token, "ALL", "Moderator", f"Sve faze na {phase_idx+1}")
+    notify("unlock")
     db_save()
     return JSONResponse({"ok": True})
 
@@ -1861,6 +1909,7 @@ async def api_mod_inject(body: dict):
     with STATE_LOCK:
         STATE["injects"].append(inj)
     log_event("MOD_INJECT", token, target, sender, f"{inj['id']}: {msg[:80]}")
+    notify("inject")
     db_save()
     return JSONResponse({"ok": True, "id": inj["id"]})
 
@@ -1882,6 +1931,7 @@ async def api_mod_breaking(body: dict):
     with STATE_LOCK:
         STATE["media_feed"].append(item)
     log_event("MOD_BREAKING", token, target, channel, text[:80])
+    notify("media")
     db_save()
     return JSONResponse({"ok": True, "id": item["id"]})
 
@@ -1976,6 +2026,7 @@ def _apply_scenario(token: str, phases, reset_sessions: bool):
                                       "created_at": time.time()}
     log_event("SCENARIO_UPDATE", token, "", "Moderator",
               f"{len(phases)} faza, reset={reset_sessions}")
+    notify("scenario")
     db_save()
     return True, ""
 
@@ -2015,6 +2066,7 @@ async def api_set_timer(body: dict):
     with STATE_LOCK:
         STATE.setdefault("settings", {})["phase_time_min"] = minutes
     log_event("TIMER_SET", token, "", "Moderator", f"{minutes} min" if minutes else "isključen")
+    notify("timer")
     db_save()
     return JSONResponse({"ok": True, "minutes": minutes})
 
@@ -2079,6 +2131,121 @@ async def api_scenario_delete(body: dict):
         log_event("SCENARIO_DELETE", token, "", "Moderator", name)
     return JSONResponse({"ok": bool(deleted),
                          "error": None if deleted else f"Scenario '{name}' nije pronađen."})
+
+# ─── SSE STREAM ───────────────────────────────────────────────────────────────
+
+@app.get("/api/events_stream")
+async def api_events_stream(request: Request, token: str = ""):
+    """Server-Sent Events: pushes refresh triggers to clients with ~1s latency.
+
+    Polling remains as a fallback, so a dropped stream degrades gracefully.
+    A comment heartbeat every 15s keeps the Azure front-end from idling out
+    the connection; EventSource auto-reconnects on any failure.
+    """
+    tok = (token
+           or request.cookies.get(COOKIE_MOD, "")
+           or request.cookies.get(COOKIE_STUDENT, "")
+           or "").strip().upper()
+    meta = get_token_meta(tok)
+    is_mod = bool(meta and meta.get("mode") == "moderator")
+    s = None if is_mod else get_session(tok)
+    if not is_mod and not s:
+        return JSONResponse({"ok": False, "error": "Sesija nije aktivna."}, 401)
+    my_team = s["team"] if s else None
+
+    async def gen():
+        last = NOTIFY_SEQ
+        last_beat = time.time()
+        yield "retry: 3000\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            pending = [n for n in NOTIFY_LOG if n["seq"] > last]
+            for n in pending:
+                last = n["seq"]
+                t = n["team"]
+                visible = is_mod or t == "" or (my_team and t == my_team)
+                if t == MOD_ONLY and not is_mod:
+                    visible = False
+                if visible:
+                    yield f"event: {n['type']}\ndata: {n['seq']}\n\n"
+                    last_beat = time.time()
+            if time.time() - last_beat > 15:
+                yield ": ping\n\n"
+                last_beat = time.time()
+            await asyncio.sleep(0.7)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+# ─── QUESTION ANALYTICS ───────────────────────────────────────────────────────
+
+def compute_question_stats():
+    """Per-question difficulty analysis across all teams and participants.
+
+    For every question: how individuals answered (distribution, % correct),
+    how team consensuses landed, and the most common wrong answer — the signal
+    that tells the instructor which legal concepts the group misunderstands.
+    """
+    phases_out = []
+    for pi, p in enumerate(PHASES):
+        qs = p.get("questions", {})
+        entries = []  # (scope_label, team_filter, question, answer_offset)
+        if qs.get("shared"):
+            entries.append(("Zajedničko pitanje", None, qs["shared"], 0))
+        for team in TEAMS:
+            for qi, q in enumerate(list(qs.get(team, []))[:3]):
+                entries.append((team, team, q, qi + 1))
+
+        out_qs = []
+        for scope, team_filter, q, offset in entries:
+            qtext = str(q[0]) if len(q) > 0 else ""
+            opts  = q[1] if len(q) > 1 and isinstance(q[1], list) else []
+            ci    = q[2] if len(q) > 2 else -1
+            correct_opt = opts[ci] if 0 <= ci < len(opts) else None
+
+            dist, ind_n, ind_ok, cons_n, cons_ok = {}, 0, 0, 0, 0
+            for team in ([team_filter] if team_filter else TEAMS):
+                tp = STATE["team_phases"].get(tp_key(team, pi), {})
+                for ans_list in tp.get("individual", {}).values():
+                    if offset < len(ans_list):
+                        a = ans_list[offset]
+                        dist[a] = dist.get(a, 0) + 1
+                        ind_n += 1
+                        if a == correct_opt:
+                            ind_ok += 1
+                cons = tp.get("consensus", []) or []
+                if tp.get("status") == "done" and offset < len(cons):
+                    cons_n += 1
+                    if cons[offset] == correct_opt:
+                        cons_ok += 1
+
+            wrong = [(k, v) for k, v in dist.items() if k != correct_opt]
+            top_wrong = max(wrong, key=lambda x: x[1]) if wrong else (None, 0)
+            out_qs.append({
+                "scope": scope,
+                "question": qtext,
+                "correct": correct_opt,
+                "individual_n": ind_n,
+                "individual_ok": ind_ok,
+                "individual_pct": round(ind_ok / ind_n * 100) if ind_n else None,
+                "consensus_n": cons_n,
+                "consensus_ok": cons_ok,
+                "top_wrong": {"text": top_wrong[0], "count": top_wrong[1]} if top_wrong[0] else None,
+                "distribution": sorted(
+                    [{"answer": k, "count": v, "is_correct": k == correct_opt} for k, v in dist.items()],
+                    key=lambda x: -x["count"]),
+            })
+        phases_out.append({"phase": pi + 1, "title": p.get("title", f"Faza {pi+1}"), "questions": out_qs})
+    return phases_out
+
+@app.get("/api/mod/question_stats")
+async def api_question_stats(request: Request, token: str = ""):
+    tok = (token or request.cookies.get(COOKIE_MOD, "") or "").strip().upper()
+    require_mod(tok)
+    return JSONResponse({"ok": True, "phases": compute_question_stats()})
 
 # ─── PARTICIPANT DEBRIEF ──────────────────────────────────────────────────────
 
@@ -2306,9 +2473,36 @@ def _generate_pdf():
             txt(f"  {team}: {ok_count}/{len(allq)} tacnih — konsenzus predat")
         pdf.ln(2)
 
+    # Question analytics — which legal concepts the group got wrong most often.
+    pdf.add_page()
+    hdr("4. ANALIZA PO PITANJIMA")
+    txt("Procenat tačnih individualnih odgovora po pitanju i najčešća pogrešna opcija — "
+        "putokaz koje koncepte grupa nije savladala.", 8)
+    pdf.ln(1)
+    for ph in compute_question_stats():
+        answered = [q for q in ph["questions"] if q["individual_n"]]
+        if not answered:
+            continue
+        sub(f"Faza {ph['phase']}: {ph['title'][:70]}")
+        for q in answered:
+            pct = q["individual_pct"]
+            flag = "!" if pct is not None and pct < 50 else " "
+            pdf.set_font(FAM, "B" if flag == "!" else "", 8)
+            pdf.multi_cell(0, 4,
+                T(f"{flag} [{q['scope'][:22]}] {pct}% tacno ({q['individual_ok']}/{q['individual_n']}) — {q['question'][:95]}"),
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            if q["top_wrong"] and pct is not None and pct < 100:
+                pdf.set_font(FAM, "", 7)
+                pdf.set_text_color(120, 30, 30)
+                pdf.multi_cell(0, 4,
+                    T(f"    najčešća greška ({q['top_wrong']['count']}x): {str(q['top_wrong']['text'])[:100]}"),
+                    new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
+
     # Events log
     pdf.add_page()
-    hdr("4. HRONOLOGIJA DOGADJAJA")
+    hdr("5. HRONOLOGIJA DOGADJAJA")
     for e in STATE["events"][-80:]:
         pdf.set_font(FAM, "", 8)
         line = f"[{e['time']}] {e['kind']} | {e.get('team','')} | {e.get('name','')} | {e.get('details','')}"

@@ -69,5 +69,11 @@ blackgrid/
 - **Inject „Odgovori"** — dugme na svakoj moderatorskoj poruci popunjava ID i fokusira polje za odgovor.
 - **Debrief ekran** — po završetku poslednje faze učesnici vide skor po fazama, ukupnu tačnost i konačan plasman svih timova.
 - **Biblioteka scenarija** — tab Scenario: čuvanje aktivnog scenarija pod nazivom, aktiviranje (sa ili bez reseta) i brisanje; čuva se u SQLite (`scenarios` tabela).
+
+## v4
+
+- **Persistentna baza** — bez `BLACKGRID_DB` env varijable, aplikacija sama kreira `/home/data/blackgrid.db` (jedina lokacija koja preživljava Azure restart/redeploy); glasno upozorenje ako završi u `/tmp`.
+- **Analitika po pitanju** — tab Debriefing: % tačnih individualnih odgovora po svakom pitanju, najčešća pogrešna opcija, učinak konsenzusa; pitanja ispod 50% istaknuta crveno. Ista analiza je sekcija 4 PDF izveštaja.
+- **Live push (SSE)** — `/api/events_stream`: injecti, breaking vesti, otključavanja, predaje i promene tajmera stižu klijentima za ~1s umesto čekanja na polling; filtrirano po timu, moderatorski događaji samo mod panelu. Polling ostaje kao fallback, EventSource se sam rekonektuje.
 3. Moderator pokreće injecte i prati timove u realnom vremenu
 4. Po završetku konsenzusa → moderator klikne "Otključaj" za sledeću fazu
